@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF & Document Forensic Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0f172a;
+      --bg-secondary: #1e293b;
+      --bg-card: #1e293b;
+      --border-color: #334155;
+      --text-primary: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-blue: #3b82f6;
+      --accent-blue-hover: #2563eb;
+      --severity-high: #ef4444;
+      --severity-medium: #f59e0b;
+      --severity-low: #eab308;
+      --severity-info: #06b6d4;
+      --cat-confirmed: #10b981;
+      --cat-suspicious: #f97316;
+      --cat-inconclusive: #64748b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    header h1 {
+      font-size: 2.2rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #60a5fa, #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+    }
+
+    header p {
+      color: var(--text-muted);
+      font-size: 1rem;
+    }
+
+    .upload-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 2rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+    }
+
+    .drop-zone {
+      border: 2px dashed #475569;
+      border-radius: 12px;
+      padding: 2.5rem 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      background: rgba(15, 23, 42, 0.5);
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--accent-blue);
+      background: rgba(59, 130, 246, 0.08);
+    }
+
+    .drop-icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      display: block;
+    }
+
+    .drop-zone h3 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .drop-zone p {
+      color: var(--text-muted);
+      font-size: 0.88rem;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .preview-container {
+      display: none;
+      margin-top: 1.5rem;
+      padding: 1rem;
+      background: #0b1120;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+      align-items: center;
+      gap: 1.25rem;
+    }
+
+    .preview-img {
+      max-width: 140px;
+      max-height: 140px;
+      object-fit: contain;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: #020617;
+    }
+
+    .pdf-badge-icon {
+      width: 70px;
+      height: 70px;
+      background: #ef4444;
+      color: white;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1.2rem;
+      flex-shrink: 0;
+    }
+
+    .file-meta {
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .file-meta .name {
+      font-weight: 600;
+      font-size: 1rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 0.25rem;
+    }
+
+    .file-meta .size {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    .options-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-top: 1.5rem;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .select-group {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .select-group label {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+    }
+
+    select {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      padding: 0.55rem 0.9rem;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .btn-analyze {
+      background: var(--accent-blue);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 0.75rem 1.8rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: background 0.2s ease;
+    }
+
+    .btn-analyze:hover {
+      background: var(--accent-blue-hover);
+    }
+
+    .btn-analyze:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .spinner {
+      display: none;
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error-banner {
+      display: none;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid var(--severity-high);
+      color: #fca5a5;
+      padding: 1rem 1.25rem;
+      border-radius: 10px;
+      margin-bottom: 2rem;
+      font-size: 0.95rem;
+    }
+
+    /* Results Dashboard */
+    .results-section {
+      display: none;
+      animation: fadeIn 0.4s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .summary-banner {
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(15, 23, 42, 0.9));
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 1.5rem 2rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .summary-text h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+    }
+
+    .summary-text p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    .chips-group {
+      display: flex;
+      gap: 0.6rem;
+    }
+
+    .chip {
+      padding: 0.35rem 0.85rem;
+      border-radius: 20px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .chip-confirmed {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .chip-suspicious {
+      background: rgba(249, 115, 22, 0.15);
+      color: #fb923c;
+      border: 1px solid rgba(249, 115, 22, 0.3);
+    }
+
+    .chip-inconclusive {
+      background: rgba(100, 116, 139, 0.15);
+      color: #94a3b8;
+      border: 1px solid rgba(100, 116, 139, 0.3);
+    }
+
+    .grid-2col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .grid-2col {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 1.5rem;
+    }
+
+    .card h3 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .date-block {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .date-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 0.25rem;
+      font-weight: 600;
+    }
+
+    .date-val {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    .fact-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+      font-size: 0.88rem;
+    }
+
+    .fact-item:last-child {
+      border-bottom: none;
+    }
+
+    .fact-name {
+      color: var(--text-muted);
+    }
+
+    .fact-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      max-width: 250px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .copy-btn {
+      background: transparent;
+      border: none;
+      color: var(--accent-blue);
+      cursor: pointer;
+      font-size: 0.75rem;
+      margin-left: 0.4rem;
+    }
+
+    /* Findings List */
+    .finding-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+      transition: border-color 0.2s ease;
+    }
+
+    .finding-card:hover {
+      border-color: #475569;
+    }
+
+    .finding-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.6rem;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .finding-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+
+    .badges {
+      display: flex;
+      gap: 0.4rem;
+    }
+
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 0.2rem 0.55rem;
+      border-radius: 6px;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-high { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .badge-medium { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .badge-low { background: rgba(234, 179, 8, 0.2); color: #fde047; border: 1px solid rgba(234, 179, 8, 0.4); }
+    .badge-info { background: rgba(6, 182, 212, 0.2); color: #67e8f9; border: 1px solid rgba(6, 182, 212, 0.4); }
+
+    .finding-desc {
+      color: #cbd5e1;
+      font-size: 0.9rem;
+      line-height: 1.45;
+      margin-bottom: 0.75rem;
+    }
+
+    .evidence-box {
+      background: #090e17;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      overflow-x: auto;
+    }
+
+    /* Accordion */
+    details {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      margin-top: 1.5rem;
+      overflow: hidden;
+    }
+
+    summary {
+      padding: 1rem;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      user-select: none;
+      outline: none;
+      color: var(--text-muted);
+    }
+
+    summary:hover {
+      color: var(--text-primary);
+    }
+
+    .raw-json {
+      background: #060911;
+      padding: 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: #38bdf8;
+      overflow-x: auto;
+      max-height: 350px;
+    }
+
+    .img-modal-preview {
+      max-width: 100%;
+      max-height: 250px;
+      object-fit: contain;
+      border-radius: 8px;
+      margin-top: 0.75rem;
+      border: 1px solid var(--border-color);
+      background: #090e17;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>PDF & Document Forensic Analyzer</h1>
+      <p>Instant forensic metadata validation & tampering detection for PDFs and Images</p>
+    </header>
+
+    <div class="error-banner" id="errorBanner"></div>
+
+    <div class="upload-card">
+      <div class="drop-zone" id="dropZone">
+        <span class="drop-icon">📄</span>
+        <h3>Upload a PDF or Image Document</h3>
+        <p>Drag and drop a PDF, JPEG, PNG, or WebP file here, or click to browse</p>
+        <input type="file" id="fileInput" accept=".pdf,image/png,image/jpeg,image/jpg,image/webp,image/tiff">
+      </div>
+
+      <div class="preview-container" id="previewContainer">
+        <div id="pdfIcon" class="pdf-badge-icon" style="display: none;">PDF</div>
+        <img id="imagePreview" class="preview-img" style="display: none;" alt="Preview">
+        <div class="file-meta">
+          <div class="name" id="fileName">-</div>
+          <div class="size" id="fileSize">-</div>
+        </div>
+      </div>
+
+      <div class="options-row">
+        <div class="select-group">
+          <label for="docTypeSelect">Document Context:</label>
+          <select id="docTypeSelect">
+            <option value="">Auto-detect from file</option>
+            <option value="official">Official Record (Bank Receipt, Invoice, Govt ID)</option>
+            <option value="standard">Standard Document (Resume, Contract Draft, Report)</option>
+          </select>
+        </div>
+
+        <button class="btn-analyze" id="btnAnalyze" disabled>
+          <span class="spinner" id="btnSpinner"></span>
+          <span id="btnText">Analyze Document</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Results Section -->
+    <div class="results-section" id="resultsSection">
+      <div class="summary-banner">
+        <div class="summary-text">
+          <h2 id="summaryTitle">Analysis Complete</h2>
+          <p id="summaryOverall">-</p>
+        </div>
+        <div class="chips-group">
+          <span class="chip chip-confirmed" id="chipConfirmed">0 Confirmed</span>
+          <span class="chip chip-suspicious" id="chipSuspicious">0 Suspicious</span>
+          <span class="chip chip-inconclusive" id="chipInconclusive">0 Inconclusive</span>
+        </div>
+      </div>
+
+      <div class="grid-2col">
+        <!-- Human Readable Dates -->
+        <div class="card">
+          <h3>🕒 Standardized Document Dates</h3>
+          <div class="date-block">
+            <div class="date-label">Created Date</div>
+            <div class="date-val" id="creationDateVal">Not available</div>
+          </div>
+          <div class="date-block">
+            <div class="date-label">Modified Date</div>
+            <div class="date-val" id="modDateVal">Not available</div>
+          </div>
+          <p id="dateDiffNote" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;"></p>
+        </div>
+
+        <!-- File Facts -->
+        <div class="card">
+          <h3>📋 File Facts & Preview</h3>
+          <div class="fact-item">
+            <span class="fact-name">File Name</span>
+            <span class="fact-val" id="factName">-</span>
+          </div>
+          <div class="fact-item">
+            <span class="fact-name">File Size</span>
+            <span class="fact-val" id="factSize">-</span>
+          </div>
+          <div class="fact-item">
+            <span class="fact-name">Format / Version</span>
+            <span class="fact-val" id="factVersion">-</span>
+          </div>
+          <div class="fact-item">
+            <span class="fact-name">Page Count</span>
+            <span class="fact-val" id="factPages">-</span>
+          </div>
+          <div class="fact-item">
+            <span class="fact-name">SHA-256</span>
+            <span class="fact-val" id="factSha256">-</span>
+          </div>
+          <img id="resultImagePreview" class="img-modal-preview" style="display: none;" alt="Uploaded Document Preview">
+        </div>
+      </div>
+
+      <!-- Edit Detection Test Cases -->
+      <div class="card" id="testCasesCard" style="display: none; margin-bottom: 1.5rem;">
+        <h3>🛡️ Edit Detection Forensic Analysis (3 Test Cases)</h3>
+        <div id="testCasesContainer" style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;"></div>
+      </div>
+
+      <!-- Findings List -->
+      <div class="card">
+        <h3>🔍 Metadata Forensic Flags</h3>
+        <div id="findingsList"></div>
+      </div>
+
+      <!-- Raw Metadata Accordion -->
+      <details>
+        <summary>View Complete Raw Metadata (JSON)</summary>
+        <pre class="raw-json" id="rawMetadataJson"></pre>
+      </details>
+    </div>
+  </div>
+
+  <script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const previewContainer = document.getElementById('previewContainer');
+    const pdfIcon = document.getElementById('pdfIcon');
+    const imagePreview = document.getElementById('imagePreview');
+    const resultImagePreview = document.getElementById('resultImagePreview');
+    const fileName = document.getElementById('fileName');
+    const fileSize = document.getElementById('fileSize');
+    const btnAnalyze = document.getElementById('btnAnalyze');
+    const btnSpinner = document.getElementById('btnSpinner');
+    const btnText = document.getElementById('btnText');
+    const errorBanner = document.getElementById('errorBanner');
+    const resultsSection = document.getElementById('resultsSection');
+    const docTypeSelect = document.getElementById('docTypeSelect');
+
+    let currentFile = null;
+
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) {
+        handleFileSelect(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        handleFileSelect(e.target.files[0]);
+      }
+    });
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function handleFileSelect(file) {
+      currentFile = file;
+      fileName.textContent = file.name;
+      fileSize.textContent = formatBytes(file.size);
+      previewContainer.style.display = 'flex';
+      errorBanner.style.display = 'none';
+      resultsSection.style.display = 'none';
+
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          imagePreview.src = e.target.result;
+          imagePreview.style.display = 'block';
+          resultImagePreview.src = e.target.result;
+          resultImagePreview.style.display = 'block';
+          pdfIcon.style.display = 'none';
+        };
+        reader.readAsDataURL(file);
+      } else {
+        imagePreview.style.display = 'none';
+        resultImagePreview.style.display = 'none';
+        pdfIcon.style.display = 'flex';
+      }
+
+      btnAnalyze.disabled = false;
+    }
+
+    btnAnalyze.addEventListener('click', async () => {
+      if (!currentFile) return;
+
+      errorBanner.style.display = 'none';
+      btnAnalyze.disabled = true;
+      btnSpinner.style.display = 'inline-block';
+      btnText.textContent = 'Analyzing...';
+
+      const formData = new FormData();
+      formData.append('file', currentFile);
+      if (docTypeSelect.value) {
+        formData.append('doc_type', docTypeSelect.value);
+      }
+
+      try {
+        const response = await fetch('/analyze', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || 'Analysis request failed');
+        }
+
+        renderResults(data);
+      } catch (err) {
+        errorBanner.textContent = 'Error: ' + err.message;
+        errorBanner.style.display = 'block';
+      } finally {
+        btnAnalyze.disabled = false;
+        btnSpinner.style.display = 'none';
+        btnText.textContent = 'Analyze Document';
+      }
+    });
+
+    function renderResults(res) {
+      resultsSection.style.display = 'block';
+      resultsSection.scrollIntoView({ behavior: 'smooth' });
+
+      // Summary
+      if (res.summary.classification) {
+        document.getElementById('summaryTitle').textContent = `Classification: ${res.summary.classification.toUpperCase().replace(/_/g, ' ')}`;
+      } else {
+        document.getElementById('summaryTitle').textContent = 'Analysis Complete';
+      }
+      document.getElementById('summaryOverall').textContent = res.summary.overall;
+      document.getElementById('chipConfirmed').textContent = `${res.summary.confirmed} Confirmed`;
+      document.getElementById('chipSuspicious').textContent = `${res.summary.suspicious} Suspicious`;
+      document.getElementById('chipInconclusive').textContent = `${res.summary.inconclusive} Inconclusive`;
+
+      // Render Test Cases
+      const tcCard = document.getElementById('testCasesCard');
+      const tcContainer = document.getElementById('testCasesContainer');
+      if (res.test_cases) {
+        tcCard.style.display = 'block';
+        tcContainer.innerHTML = '';
+
+        // TC 1: Incremental Revisions
+        const tc1 = res.test_cases.incremental_revisions;
+        const tc1Div = document.createElement('div');
+        tc1Div.className = 'finding-card';
+        tc1Div.innerHTML = `
+          <div class="finding-header">
+            <span class="finding-title">1. Incremental Revisions (${tc1.revision_count} Revision${tc1.revision_count > 1 ? 's' : ''})</span>
+            <span class="badge ${tc1.status === 'changes_detected' ? 'badge-high' : 'badge-info'}">${tc1.status.replace(/_/g, ' ')}</span>
+          </div>
+          <p style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 0.5rem;">
+            Previous revision recovered: <strong>${tc1.previous_revision_recovered ? 'Yes' : 'No'}</strong> | Detected changes: <strong>${tc1.changes.length}</strong>
+          </p>
+          ${tc1.changes.length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(tc1.changes, null, 2))}</pre>` : ''}
+          ${tc1.limitations.length > 0 ? `<p style="font-size: 0.8rem; color: #94a3b8;">Limitations: ${escapeHtml(tc1.limitations.join('; '))}</p>` : ''}
+        `;
+        tcContainer.appendChild(tc1Div);
+
+        // TC 2: Digital Signatures
+        const tc2 = res.test_cases.digital_signatures;
+        const tc2Div = document.createElement('div');
+        tc2Div.className = 'finding-card';
+        tc2Div.innerHTML = `
+          <div class="finding-header">
+            <span class="finding-title">2. Digital Signatures (${tc2.signatures_found} Signature${tc2.signatures_found > 1 ? 's' : ''})</span>
+            <span class="badge ${tc2.status === 'post_signature_changes_detected' ? 'badge-high' : (tc2.status === 'signed_intact_no_later_changes' ? 'badge-info' : 'badge-low')}">${tc2.status.replace(/_/g, ' ')}</span>
+          </div>
+          ${tc2.signature_results.length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(tc2.signature_results, null, 2))}</pre>` : '<p style="font-size: 0.9rem; color: #94a3b8;">Document is unsigned (normal for standard PDFs).</p>'}
+        `;
+        tcContainer.appendChild(tc2Div);
+
+        // TC 3: Re-saved PDF Analysis
+        const tc3 = res.test_cases.resaved_pdf_analysis;
+        const tc3Div = document.createElement('div');
+        tc3Div.className = 'finding-card';
+        tc3Div.innerHTML = `
+          <div class="finding-header">
+            <span class="finding-title">3. Re-saved PDF Layout & Content Scan</span>
+            <span class="badge ${tc3.status === 'suspicious_indicators_found' ? 'badge-medium' : 'badge-info'}">${tc3.status.replace(/_/g, ' ')}</span>
+          </div>
+          <p style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 0.5rem;">
+            Anomalies detected: <strong>${tc3.findings.length}</strong> | Historical comparison available: <strong>${tc3.historical_comparison_available ? 'Yes' : 'No'}</strong>
+          </p>
+          ${tc3.findings.length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(tc3.findings, null, 2))}</pre>` : '<p style="font-size: 0.9rem; color: #94a3b8;">No layout or font anomalies detected.</p>'}
+        `;
+        tcContainer.appendChild(tc3Div);
+      } else {
+        tcCard.style.display = 'none';
+      }
+
+      // Dates
+      const cDate = res.metadata.dates?.creation_date || 'Not specified in metadata';
+      const mDate = res.metadata.dates?.modification_date || 'Not specified in metadata';
+      document.getElementById('creationDateVal').textContent = cDate;
+      document.getElementById('modDateVal').textContent = mDate;
+
+      // File Facts
+      document.getElementById('factName').textContent = res.file.name;
+      document.getElementById('factSize').textContent = formatBytes(res.file.size_bytes);
+      document.getElementById('factVersion').textContent = res.file.pdf_version;
+      document.getElementById('factPages').textContent = res.file.page_count;
+      document.getElementById('factSha256').textContent = res.file.sha256;
+
+      // Findings
+      const findingsList = document.getElementById('findingsList');
+      findingsList.innerHTML = '';
+
+      if (res.findings.length === 0) {
+        findingsList.innerHTML = '<p style="color: #94a3b8; font-size: 0.9rem;">No forensic flags or inconsistencies detected in metadata.</p>';
+      } else {
+        res.findings.forEach(f => {
+          const div = document.createElement('div');
+          div.className = 'finding-card';
+
+          const sevClass = `badge-${f.severity.toLowerCase()}`;
+          const catClass = `chip-${f.category.toLowerCase()}`;
+
+          div.innerHTML = `
+            <div class="finding-header">
+              <span class="finding-title">${escapeHtml(f.title)}</span>
+              <div class="badges">
+                <span class="badge ${sevClass}">${f.severity}</span>
+                <span class="chip ${catClass}" style="padding: 0.2rem 0.5rem; font-size: 0.7rem;">${f.category}</span>
+              </div>
+            </div>
+            <div class="finding-desc">${escapeHtml(f.explanation)}</div>
+            ${Object.keys(f.evidence).length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(f.evidence, null, 2))}</pre>` : ''}
+          `;
+          findingsList.appendChild(div);
+        });
+      }
+
+      // Raw Metadata
+      document.getElementById('rawMetadataJson').textContent = JSON.stringify(res.metadata, null, 2);
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+  </script>
+</body>
+</html>
+
