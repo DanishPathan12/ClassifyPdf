@@ -89,6 +89,37 @@ def analyze_resaved_pdf(
     )
 
 
+def resaved_findings_to_forensic(resaved_result: TestCase3ResavedResult) -> list[ForensicFinding]:
+    """Convert layout-level resaved findings into standardized ForensicFinding objects."""
+    from app.schemas.analysis import ForensicFinding
+
+    code_map = {
+        "unusual_text_overlap": "LAYOUT_TEXT_OVERLAP",
+        "text_over_image": "LAYOUT_TEXT_OVER_IMAGE",
+        "inconsistent_font_anomaly": "LAYOUT_INCONSISTENT_FONT",
+        "isolated_text_overlay": "LAYOUT_ISOLATED_OVERLAY",
+    }
+    forensic_findings: list[ForensicFinding] = []
+    for rf in resaved_result.findings:
+        code = code_map.get(rf.type, f"LAYOUT_{rf.type.upper()}")
+        conf = 0.30 if rf.confidence == "medium" else 0.20
+        forensic_findings.append(
+            ForensicFinding(
+                code=code,
+                category="layout_analysis",
+                severity="low" if rf.confidence == "low" else "medium",
+                confidence=conf,
+                description=rf.description,
+                evidence=rf.evidence if isinstance(rf.evidence, dict) else {"details": str(rf.evidence)},
+                limitations=[
+                    "Layout and typographic anomalies may reflect intentional document design, watermarks, "
+                    "multi-column typography, or OCR layers, and do not prove manipulation independently."
+                ],
+            )
+        )
+    return forensic_findings
+
+
 def _detect_text_overlap(
     layout: PageLayout,
     page_num: int,
@@ -178,6 +209,7 @@ def _detect_text_over_image(
                     evidence={
                         "image_bbox": img.bbox,
                         "overlaid_words": words_text,
+                        "overlaid_text": " ".join(words_text),
                         "word_count": len(overlaid_words),
                     },
                     confidence="medium",

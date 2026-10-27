@@ -118,19 +118,6 @@ def extract_pdf_layout(pdf_bytes: bytes) -> list[PageLayout]:
                 rotation=page.rotation,
             )
 
-            # Extract words: (x0, y0, x1, y1, word, block_no, line_no, word_no)
-            words_data = page.get_text("words")
-            for w in words_data:
-                w_text = str(w[4]).strip()
-                if w_text:
-                    layout.words.append(
-                        TextSpan(
-                            text=w_text,
-                            bbox=[round(float(c), 2) for c in w[:4]],
-                            page=p_idx,
-                        )
-                    )
-
             # Extract text blocks / lines with font details
             text_dict = page.get_text("dict")
             for block in text_dict.get("blocks", []):
@@ -161,6 +148,46 @@ def extract_pdf_layout(pdf_bytes: bytes) -> list[PageLayout]:
                             page=p_idx,
                         )
                     )
+
+            # Extract words: (x0, y0, x1, y1, word, block_no, line_no, word_no)
+            words_data = page.get_text("words")
+            blocks = text_dict.get("blocks", [])
+            for w in words_data:
+                w_text = str(w[4]).strip()
+                if not w_text:
+                    continue
+
+                b_no, l_no = int(w[5]), int(w[6])
+                matched_font = "unknown"
+                matched_size = 10.0
+                is_bold = False
+                is_italic = False
+
+                try:
+                    if b_no < len(blocks) and "lines" in blocks[b_no]:
+                        lines = blocks[b_no]["lines"]
+                        if l_no < len(lines):
+                            for s in lines[l_no].get("spans", []):
+                                if w_text in s.get("text", ""):
+                                    matched_font = s.get("font", "unknown")
+                                    matched_size = round(float(s.get("size", 10.0)), 2)
+                                    is_bold = bool(s.get("flags", 0) & 2)
+                                    is_italic = bool(s.get("flags", 0) & 1)
+                                    break
+                except Exception:
+                    pass
+
+                layout.words.append(
+                    TextSpan(
+                        text=w_text,
+                        bbox=[round(float(c), 2) for c in w[:4]],
+                        font_name=matched_font,
+                        font_size=matched_size,
+                        is_bold=is_bold,
+                        is_italic=is_italic,
+                        page=p_idx,
+                    )
+                )
             pages.append(layout)
         doc.close()
         return pages

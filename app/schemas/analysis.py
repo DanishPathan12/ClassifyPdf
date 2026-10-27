@@ -2,10 +2,63 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import Category, FileInfo, Finding, MetadataContainer, Severity, Summary
+
+
+class ForensicVerdict(str, Enum):
+    """Standardized verdicts for PDF forensic manipulation analysis."""
+
+    LIKELY_EDITED = "likely_edited"
+    SUSPICIOUS_INDICATORS = "suspicious_indicators"
+    NO_EDIT_EVIDENCE_FOUND = "no_edit_evidence_found"
+    INCONCLUSIVE = "inconclusive"
+
+
+class CheckExecutionStatus(str, Enum):
+    """Execution status for an individual forensic analysis check."""
+
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class ForensicFinding(BaseModel):
+    """An evidence-based forensic finding with standardized attributes."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    code: str = Field(..., description="Stable machine-readable code e.g. SIG_POST_SIGNING_MODIFICATION")
+    category: str = Field(
+        default="suspicious",
+        description="Forensic category classification: confirmed | suspicious | inconclusive",
+    )
+    domain: str = Field(
+        default="general",
+        description="Forensic domain: digital_signatures | revision_history | content_stream | metadata | layout_analysis",
+    )
+    severity: str = Field(..., description="info | low | medium | high")
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Calibrated confidence from 0.0 to 1.0")
+    description: str = Field(..., description="Plain-English explanation of the observed forensic condition")
+    evidence: Any = Field(default_factory=dict, description="Supporting structural/offset/operator evidence")
+    limitations: list[str] = Field(default_factory=list, description="Methodological limitations or innocent causes")
+
+    # Compatibility attributes for dashboard and older clients
+    id: str | None = Field(default=None, description="Alias for code")
+    title: str | None = Field(default=None, description="Human-readable title")
+    explanation: str | None = Field(default=None, description="Alias for description")
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.id is None:
+            self.id = self.code
+        if self.title is None:
+            self.title = self.code.replace("_", " ").title()
+        if self.explanation is None:
+            self.explanation = self.description
 
 
 class ChangeLocation(BaseModel):
@@ -126,30 +179,65 @@ class TestCasesContainer(BaseModel):
 
 
 class UnifiedSummary(BaseModel):
-    """Top-level unified forensic summary with explicit classification."""
+    """Top-level unified forensic summary with explicit verdict and evidence metrics."""
 
     model_config = ConfigDict(extra="ignore")
 
+    verdict: str = Field(
+        default="inconclusive",
+        description="likely_edited | suspicious_indicators | no_edit_evidence_found | inconclusive",
+    )
+    edit_detected: bool | None = Field(
+        default=None,
+        description="true when likely_edited, false when no_edit_evidence_found, null when suspicious or inconclusive",
+    )
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Calibrated confidence score from 0.0 to 1.0")
     classification: str = Field(
         default="inconclusive",
-        description="confirmed_changes | suspicious_indicators | no_edit_evidence_found | inconclusive",
+        description="Legacy classification: confirmed_changes | suspicious_indicators | no_edit_evidence_found | inconclusive",
     )
+    overall: str = Field(default="", description="Neutral plain-English summary of forensic analysis")
     confirmed_changes: int = Field(default=0, ge=0)
     suspicious_indicators: int = Field(default=0, ge=0)
     confirmed: int = Field(default=0, ge=0)
     suspicious: int = Field(default=0, ge=0)
     inconclusive: int = Field(default=0, ge=0)
-    overall: str = Field(default="")
     limitations: list[str] = Field(default_factory=list)
 
 
 class UnifiedAnalysisResponse(BaseModel):
-    """Unified API response including file info, metadata findings, test cases, and summary."""
+    """Unified API response matching the modern forensic specification while preserving backward compatibility."""
 
     model_config = ConfigDict(extra="ignore")
 
+    # Modern forensic schema fields
+    file_name: str = Field(default="document.pdf", description="Uploaded file name")
+    file_hash_sha256: str = Field(default="", description="SHA-256 hash of the uploaded file bytes")
+    verdict: str = Field(
+        default="inconclusive",
+        description="likely_edited | suspicious_indicators | no_edit_evidence_found | inconclusive",
+    )
+    edit_detected: bool | None = Field(
+        default=None,
+        description="true when likely_edited, false when no_edit_evidence_found, null when ambiguous or inconclusive",
+    )
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Calibrated confidence score from 0.0 to 1.0")
+    analysis_status: str = Field(default="completed", description="completed | partial | failed | inconclusive")
+    findings: list[ForensicFinding | Finding] = Field(
+        default_factory=list,
+        description="Complete list of evidence-based forensic findings across all checks",
+    )
+    checks: dict[str, str] = Field(
+        default_factory=dict,
+        description="Execution status per module: metadata, revision_history, digital_signatures, content_streams, layout_analysis",
+    )
+    limitations: list[str] = Field(
+        default_factory=list,
+        description="Methodological limitations acknowledging what analysis can and cannot prove",
+    )
+
+    # Legacy container fields for backwards compatibility
     file: FileInfo
     metadata: MetadataContainer
-    findings: list[Finding]
     test_cases: TestCasesContainer | None = Field(default=None)
     summary: UnifiedSummary

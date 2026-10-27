@@ -749,15 +749,19 @@
       resultsSection.scrollIntoView({ behavior: 'smooth' });
 
       // Summary
-      if (res.summary.classification) {
+      if (res.verdict) {
+        const vText = res.verdict.toUpperCase().replace(/_/g, ' ');
+        const confPercent = Math.round((res.confidence || 0) * 100);
+        document.getElementById('summaryTitle').textContent = `Verdict: ${vText} (${confPercent}% Confidence)`;
+      } else if (res.summary.classification) {
         document.getElementById('summaryTitle').textContent = `Classification: ${res.summary.classification.toUpperCase().replace(/_/g, ' ')}`;
       } else {
         document.getElementById('summaryTitle').textContent = 'Analysis Complete';
       }
-      document.getElementById('summaryOverall').textContent = res.summary.overall;
-      document.getElementById('chipConfirmed').textContent = `${res.summary.confirmed} Confirmed`;
-      document.getElementById('chipSuspicious').textContent = `${res.summary.suspicious} Suspicious`;
-      document.getElementById('chipInconclusive').textContent = `${res.summary.inconclusive} Inconclusive`;
+      document.getElementById('summaryOverall').textContent = res.summary.overall || res.summary;
+      document.getElementById('chipConfirmed').textContent = `${res.summary.confirmed || 0} Confirmed`;
+      document.getElementById('chipSuspicious').textContent = `${res.summary.suspicious || 0} Suspicious`;
+      document.getElementById('chipInconclusive').textContent = `${res.summary.inconclusive || 0} Inconclusive`;
 
       // Render Test Cases
       const tcCard = document.getElementById('testCasesCard');
@@ -842,16 +846,22 @@
           const sevClass = `badge-${f.severity.toLowerCase()}`;
           const catClass = `chip-${f.category.toLowerCase()}`;
 
+          const codeText = f.code || f.id || 'ANOMALY';
+          const titleText = f.title || f.code || 'Forensic Finding';
+          const descText = f.description || f.explanation || '';
+          const limitationsText = f.limitations && f.limitations.length > 0 ? f.limitations.join('; ') : '';
+
           div.innerHTML = `
             <div class="finding-header">
-              <span class="finding-title">${escapeHtml(f.title)}</span>
+              <span class="finding-title">${escapeHtml(titleText)} <span style="font-size: 0.75rem; color: #64748b; font-family: monospace;">[${escapeHtml(codeText)}]</span></span>
               <div class="badges">
                 <span class="badge ${sevClass}">${f.severity}</span>
                 <span class="chip ${catClass}" style="padding: 0.2rem 0.5rem; font-size: 0.7rem;">${f.category}</span>
               </div>
             </div>
-            <div class="finding-desc">${escapeHtml(f.explanation)}</div>
-            ${Object.keys(f.evidence).length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(f.evidence, null, 2))}</pre>` : ''}
+            <div class="finding-desc">${escapeHtml(descText)}</div>
+            ${Object.keys(f.evidence || {}).length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(f.evidence, null, 2))}</pre>` : ''}
+            ${limitationsText ? `<p style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.5rem;"><em>Forensic Limitations:</em> ${escapeHtml(limitationsText)}</p>` : ''}
           `;
           findingsList.appendChild(div);
         });

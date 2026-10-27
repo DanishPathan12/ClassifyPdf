@@ -9,6 +9,10 @@ from pathlib import Path
 import pikepdf
 
 
+MAX_FILE_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
+MAX_PAGE_COUNT: int = 500
+
+
 @dataclass
 class LoadedPdf:
     """Container holding preserved bytes and basic attributes of a loaded PDF."""
@@ -27,12 +31,14 @@ class LoadedPdf:
 def load_pdf(
     source: bytes | Path | io.BytesIO,
     filename: str = "document.pdf",
+    max_file_size: int = MAX_FILE_SIZE_BYTES,
 ) -> LoadedPdf:
     """Safely inspect, validate, and load PDF bytes into memory.
 
     Args:
         source: Raw PDF bytes, file Path, or BytesIO buffer.
         filename: Original file name.
+        max_file_size: Maximum allowed byte size for safe processing.
 
     Returns:
         LoadedPdf with preserved original bytes and structural facts.
@@ -61,6 +67,20 @@ def load_pdf(
             is_encrypted=False,
             is_valid=False,
             error_message="File is empty (0 bytes).",
+        )
+
+    # Size limit check
+    if file_size > max_file_size:
+        return LoadedPdf(
+            file_bytes=file_bytes,
+            sha256=sha256,
+            file_size=file_size,
+            filename=filename,
+            page_count=0,
+            pdf_version="",
+            is_encrypted=False,
+            is_valid=False,
+            error_message=f"File exceeds maximum allowable size limit ({file_size} > {max_file_size} bytes).",
         )
 
     # Magic byte check: must contain %PDF- in the first 1024 bytes

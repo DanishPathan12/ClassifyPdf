@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -21,6 +23,8 @@ from app.models import (
     Severity,
     Summary,
 )
+
+logger = logging.getLogger("pdf_analyser.metadata")
 
 # Standard Info dictionary keys according to the PDF 1.7/2.0 specifications
 STANDARD_INFO_KEYS: frozenset[str] = frozenset({
@@ -1364,6 +1368,44 @@ def build_summary(findings: list[Finding]) -> Summary:
     )
 
 
+def log_pdf_metadata(
+    file_name: str,
+    file_size: int,
+    sha256: str,
+    pdf_version: str,
+    page_count: int,
+    info: dict[str, Any],
+    xmp: dict[str, Any],
+    dates: dict[str, Any] | None = None,
+) -> str:
+    """Format and log/print all extracted PDF metadata for inspection and testing."""
+    info_json = json.dumps(info, indent=2, default=str) if info else "{}"
+    xmp_json = json.dumps(xmp, indent=2, default=str) if xmp else "{}"
+    dates_json = json.dumps(dates, indent=2, default=str) if dates else "{}"
+
+    output = (
+        "\n"
+        + "=" * 80 + "\n"
+        + " " * 26 + "[PDF METADATA INSPECTION]\n"
+        + "=" * 80 + "\n"
+        + f"File Name:      {file_name}\n"
+        + f"File Size:      {file_size:,} bytes\n"
+        + f"SHA-256:        {sha256}\n"
+        + f"PDF Version:    {pdf_version}\n"
+        + f"Page Count:     {page_count}\n\n"
+        + "--- [1] PDF Info Dictionary ---\n"
+        + f"{info_json}\n\n"
+        + "--- [2] XMP Metadata Stream ---\n"
+        + f"{xmp_json}\n\n"
+        + "--- [3] Standardized Dates ---\n"
+        + f"{dates_json}\n"
+        + "=" * 80 + "\n"
+    )
+    logger.info("%s", output)
+    print(output)
+    return output
+
+
 def analyze_pdf_file(
     file_path: Path,
     file_name: str,
@@ -1383,13 +1425,25 @@ def analyze_pdf_file(
 
     findings = run_all_checks(parsed_data)
     summary = build_summary(findings)
+    dates_std = standardize_all_dates(parsed_data)
+
+    log_pdf_metadata(
+        file_name=file_name,
+        file_size=file_size,
+        sha256=sha256_hash,
+        pdf_version=parsed_data.file_info.pdf_version,
+        page_count=parsed_data.file_info.page_count,
+        info=parsed_data.info,
+        xmp=parsed_data.xmp,
+        dates=dates_std,
+    )
 
     return AnalysisResponse(
         file=parsed_data.file_info,
         metadata=MetadataContainer(
             info=parsed_data.info,
             xmp=parsed_data.xmp,
-            dates=standardize_all_dates(parsed_data),
+            dates=dates_std,
         ),
         findings=findings,
         summary=summary,

@@ -381,7 +381,8 @@ def make_incremental_pdf(
     stream = generic.StreamObject(
         stream_data=f"BT /F1 12 Tf 50 150 Td ({appended_text}) Tj ET".encode("ascii")
     )
-    w.add_stream_to_page(0, stream)
+    stream_ref = w.add_object(stream)
+    w.add_stream_to_page(0, stream_ref)
     buf2 = io.BytesIO()
     w.write(buf2)
     return buf2.getvalue()
@@ -463,7 +464,8 @@ def make_signed_pdf_with_appended_revision(
     stream = generic.StreamObject(
         stream_data=f"BT /F1 12 Tf 50 120 Td ({appended_text}) Tj ET".encode("ascii")
     )
-    w2.add_stream_to_page(0, stream)
+    stream_ref = w2.add_object(stream)
+    w2.add_stream_to_page(0, stream_ref)
     out = io.BytesIO()
     w2.write(out)
     return out.getvalue()
@@ -583,4 +585,180 @@ ET"""
     buf = io.BytesIO()
     pdf.save(buf)
     return buf.getvalue()
+
+
+def make_multi_column_newsletter_pdf() -> bytes:
+    """Generate a multi-column newsletter PDF with headings, multi-column body, and diverse fonts."""
+    pdf = pikepdf.new()
+    page = pdf.add_blank_page(page_size=(612, 792))
+    f_title = pdf.make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/Font"),
+        "/Subtype": pikepdf.Name("/Type1"),
+        "/BaseFont": pikepdf.Name("/Helvetica-Bold"),
+    }))
+    f_body = pdf.make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/Font"),
+        "/Subtype": pikepdf.Name("/Type1"),
+        "/BaseFont": pikepdf.Name("/Times-Roman"),
+    }))
+    page.Resources = pikepdf.Dictionary({
+        "/Font": pikepdf.Dictionary({"/F1": f_title, "/F2": f_body}),
+    })
+    # Title across top, Column 1 at x=54, Column 2 at x=320
+    stream = b"""BT
+/F1 20 Tf 54 730 Td (Community Newsletter Q3) Tj
+ET
+BT
+/F2 10 Tf 54 680 Td (Column one reports on community events, parks development,) Tj
+0 -14 Td (and neighborhood library programs over the past quarter.) Tj
+ET
+BT
+/F2 10 Tf 320 680 Td (Column two highlights local business partnerships, schools,) Tj
+0 -14 Td (and public transportation improvements across the city.) Tj
+ET"""
+    page.Contents = pdf.make_stream(stream)
+    buf = io.BytesIO()
+    pdf.save(buf)
+    return buf.getvalue()
+
+
+def make_watermarked_pdf() -> bytes:
+    """Generate a legitimate document with a diagonal transparent background watermark."""
+    pdf = pikepdf.new()
+    page = pdf.add_blank_page(page_size=(612, 792))
+    f_watermark = pdf.make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/Font"),
+        "/Subtype": pikepdf.Name("/Type1"),
+        "/BaseFont": pikepdf.Name("/Helvetica-Bold"),
+    }))
+    f_text = pdf.make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/Font"),
+        "/Subtype": pikepdf.Name("/Type1"),
+        "/BaseFont": pikepdf.Name("/Helvetica"),
+    }))
+    page.Resources = pikepdf.Dictionary({
+        "/Font": pikepdf.Dictionary({"/FW": f_watermark, "/FT": f_text}),
+    })
+    # Watermark drawn first, then normal text lines
+    stream = b"""q
+0.9 0.9 0.9 rg
+BT
+/FW 54 Tf 150 400 Td (DRAFT) Tj
+ET
+Q
+BT
+/FT 12 Tf 72 700 Td (Confidential Internal Project Proposal) Tj
+0 -20 Td (This document contains initial concepts for review.) Tj
+ET"""
+    page.Contents = pdf.make_stream(stream)
+    buf = io.BytesIO()
+    pdf.save(buf)
+    return buf.getvalue()
+
+
+def make_scanned_document_with_ocr_pdf() -> bytes:
+    """Generate a scanned document with an image background and legitimate full-page OCR invisible text (3 Tr)."""
+    img = Image.new("RGB", (600, 800), color="white")
+    ibuf = io.BytesIO()
+    img.save(ibuf, format="JPEG")
+
+    pdf = pikepdf.new()
+    page = pdf.add_blank_page(page_size=(612, 792))
+    pike_img = pdf.make_stream(ibuf.getvalue())
+    pike_img["/Type"] = pikepdf.Name("/XObject")
+    pike_img["/Subtype"] = pikepdf.Name("/Image")
+    pike_img["/Width"] = 600
+    pike_img["/Height"] = 800
+    pike_img["/ColorSpace"] = pikepdf.Name("/DeviceRGB")
+    pike_img["/BitsPerComponent"] = 8
+    pike_img["/Filter"] = pikepdf.Name("/DCTDecode")
+
+    f_ocr = pdf.make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/Font"),
+        "/Subtype": pikepdf.Name("/Type1"),
+        "/BaseFont": pikepdf.Name("/Helvetica"),
+    }))
+    page.Resources = pikepdf.Dictionary({
+        "/XObject": pikepdf.Dictionary({"/ImScan": pike_img}),
+        "/Font": pikepdf.Dictionary({"/FOcr": f_ocr}),
+    })
+    # Scanned image covering page + full OCR paragraph in 3 Tr
+    stream = b"""q
+612 0 0 792 0 0 cm
+/ImScan Do
+Q
+BT
+/FOcr 11 Tf 3 Tr 54 700 Td (This is searchable OCR text rendered invisibly over the scanned document.) Tj
+0 -15 Td (Standard scanners create this structure for searchability without modifying raster pixels.) Tj
+ET"""
+    page.Contents = pdf.make_stream(stream)
+    buf = io.BytesIO()
+    pdf.save(buf)
+    return buf.getvalue()
+
+
+def make_dangling_font_manipulated_pdf() -> bytes:
+    """Generate a single-revision PDF where text is typed using a dangling /F_Unregistered font."""
+    pdf = pikepdf.new()
+    page = pdf.add_blank_page(page_size=(400, 300))
+    f_normal = pdf.make_indirect(pikepdf.Dictionary({
+        "/Type": pikepdf.Name("/Font"),
+        "/Subtype": pikepdf.Name("/Type1"),
+        "/BaseFont": pikepdf.Name("/Helvetica"),
+    }))
+    page.Resources = pikepdf.Dictionary({
+        "/Font": pikepdf.Dictionary({"/F1": f_normal}),
+    })
+    # Content stream uses /F_Tampered which is absent from /Resources
+    stream = b"""BT
+/F1 12 Tf 50 200 Td (Original Approved Statement) Tj
+ET
+BT
+/F_Tampered 14 Tf 50 150 Td (Unauthorized Added Paragraph) Tj
+ET"""
+    page.Contents = pdf.make_stream(stream)
+    buf = io.BytesIO()
+    pdf.save(buf)
+    return buf.getvalue()
+
+
+def make_orphan_stream_resaved_pdf() -> bytes:
+    """Generate a PDF containing an unreferenced orphan stream object in its cross-reference table."""
+    from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+    from pyhanko.pdf_utils import generic
+
+    base = make_normal_pdf()
+    w = IncrementalPdfFileWriter(io.BytesIO(base))
+    s = generic.StreamObject(stream_data=b"BT /F1 12 Tf 50 100 Td (Old Deleted Sensitive Clause) Tj ET")
+    s[generic.pdf_name("/Type")] = generic.pdf_name("/XObject")
+    s[generic.pdf_name("/Subtype")] = generic.pdf_name("/Form")
+    w.add_object(s)
+    out = io.BytesIO()
+    w.write(out)
+    return out.getvalue()
+
+
+def make_multi_domain_manipulated_pdf() -> bytes:
+    """Generate a PDF exhibiting anomalies across distinct domains: inverted metadata + orphan stream."""
+    from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+    from pyhanko.pdf_utils import generic
+
+    base = make_moddate_before_creation_pdf()
+    w = IncrementalPdfFileWriter(io.BytesIO(base))
+    s = generic.StreamObject(stream_data=b"BT /F1 12 Tf 50 100 Td (Replaced Text Clause) Tj ET")
+    s[generic.pdf_name("/Type")] = generic.pdf_name("/XObject")
+    s[generic.pdf_name("/Subtype")] = generic.pdf_name("/Form")
+    w.add_object(s)
+    out = io.BytesIO()
+    w.write(out)
+    return out.getvalue()
+
+
+def make_tampered_signature_bytes_pdf() -> bytes:
+    """Generate a signed PDF where bytes inside the signed ByteRange are tampered."""
+    signed_bytes = bytearray(make_signed_pdf_intact(text="Initial Legitimate Text $1,000"))
+    # Corrupt byte at offset 50 inside the signed byte range to invalidate the cryptographic digest
+    signed_bytes[50] ^= 0xFF
+    return bytes(signed_bytes)
+
 
