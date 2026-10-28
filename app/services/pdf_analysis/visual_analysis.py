@@ -16,8 +16,19 @@ import io
 import logging
 from typing import Any
 
-import cv2
-import fitz  # PyMuPDF
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    import pymupdf as fitz
+except ImportError:
+    try:
+        import fitz
+    except ImportError:
+        fitz = None
+
 import numpy as np
 from PIL import Image
 
@@ -250,6 +261,20 @@ def analyze_visual_layer(
         "Different PDF rendering engines, embedded font antialiasing settings, and printer rasterizers can naturally create edge sharpness variations.",
         "Error Level Analysis (ELA) is an experimental heuristic and is not conclusive on rendered vector PDFs.",
     ]
+
+    if fitz is None or cv2 is None:
+        missing_deps = []
+        if fitz is None:
+            missing_deps.append("PyMuPDF (fitz)")
+        if cv2 is None:
+            missing_deps.append("OpenCV (cv2)")
+        dep_str = ", ".join(missing_deps)
+        logger.warning("Visual analysis skipped: required dependencies (%s) not installed.", dep_str)
+        return VisualLayerResult(
+            status="skipped",
+            summary=f"Visual analysis skipped: required dependencies ({dep_str}) not installed in this runtime.",
+            limitations=limitations + [f"Visual layer requires {dep_str} which are not installed in this environment."],
+        )
 
     try:
         doc = fitz.open(stream=loaded_pdf.file_bytes, filetype="pdf")

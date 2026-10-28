@@ -105,7 +105,10 @@ def extract_pdf_layout(pdf_bytes: bytes) -> list[PageLayout]:
     """
     # Attempt PyMuPDF first if available and unblocked
     try:
-        import fitz  # type: ignore
+        try:
+            import pymupdf as fitz  # type: ignore
+        except ImportError:
+            import fitz  # type: ignore
 
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         pages: list[PageLayout] = []

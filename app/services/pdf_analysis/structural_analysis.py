@@ -11,7 +11,14 @@ import io
 import logging
 from typing import Any
 
-import fitz  # PyMuPDF
+try:
+    import pymupdf as fitz
+except ImportError:
+    try:
+        import fitz
+    except ImportError:
+        fitz = None
+
 import pikepdf
 
 from app.schemas.analysis import ForensicFinding
@@ -134,6 +141,18 @@ def analyze_structural_layer(loaded_pdf: LoadedPdf) -> StructuralLayerResult:
         limitations.append(f"Content-stream operator audit error: {stream_err}")
 
     # 3. PyMuPDF Deep Page-Level Inspection: Text Spans, Drawings, Images, Annotations
+    if fitz is None:
+        logger.warning("PyMuPDF (fitz) is not installed in the runtime environment; skipping page-level span audit.")
+        limitations.append("PyMuPDF is not installed in the runtime environment; page-level text span and vector drawing inspection was skipped.")
+        return StructuralLayerResult(
+            status="partial",
+            summary="Structural analysis partially completed; PyMuPDF is not installed in this environment.",
+            findings=findings,
+            limitations=limitations,
+            revision_count=rev_count,
+            has_recoverable_revisions=has_revs,
+        )
+
     try:
         doc = fitz.open(stream=loaded_pdf.file_bytes, filetype="pdf")
     except Exception as doc_err:

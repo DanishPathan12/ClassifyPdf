@@ -15,8 +15,19 @@ import io
 import logging
 from typing import Any
 
-import cv2
-import fitz  # PyMuPDF
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    import pymupdf as fitz
+except ImportError:
+    try:
+        import fitz
+    except ImportError:
+        fitz = None
+
 import numpy as np
 
 from app.schemas.analysis import ForensicFinding, SignatureValidationResult
@@ -146,6 +157,20 @@ def compare_against_trusted_original(
             limitations=[
                 "Without a reference original, analysis relies solely on internal structural anomalies, metadata, and visual heuristics.",
             ],
+        )
+
+    if fitz is None or cv2 is None:
+        missing_deps = []
+        if fitz is None:
+            missing_deps.append("PyMuPDF (fitz)")
+        if cv2 is None:
+            missing_deps.append("OpenCV (cv2)")
+        dep_str = ", ".join(missing_deps)
+        return OriginalComparisonResult(
+            status="unavailable",
+            differences_detected=False,
+            summary=f"Trusted original comparison unavailable: required libraries ({dep_str}) not installed in this runtime.",
+            limitations=limitations + [f"Original comparison requires {dep_str}."],
         )
 
     orig_loaded = load_pdf(original_bytes, filename=original_filename)
