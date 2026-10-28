@@ -91,12 +91,22 @@ class VerificationLayerResult:
 
 def _mat_to_base64(mat_rgb: np.ndarray) -> str:
     """Convert an RGB NumPy image to a data:image/png;base64 URI."""
-    mat_bgr = cv2.cvtColor(mat_rgb, cv2.COLOR_RGB2BGR)
-    success, buffer = cv2.imencode(".png", mat_bgr)
-    if not success:
+    try:
+        from PIL import Image
+
+        buf = io.BytesIO()
+        img = Image.fromarray(mat_rgb)
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+    except Exception:
+        if cv2 is not None:
+            mat_bgr = cv2.cvtColor(mat_rgb, cv2.COLOR_RGB2BGR)
+            success, buffer = cv2.imencode(".png", mat_bgr)
+            if success:
+                b64 = base64.b64encode(buffer).decode("ascii")
+                return f"data:image/png;base64,{b64}"
         return ""
-    b64 = base64.b64encode(buffer).decode("ascii")
-    return f"data:image/png;base64,{b64}"
 
 
 def verify_hash_integrity(

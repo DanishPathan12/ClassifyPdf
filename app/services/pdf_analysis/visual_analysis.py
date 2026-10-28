@@ -80,12 +80,22 @@ class VisualLayerResult:
 
 def _mat_to_base64_png(image_rgb: np.ndarray) -> str:
     """Encode an RGB NumPy image array to a data:image/png;base64 URI string."""
-    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
-    success, buffer = cv2.imencode(".png", image_bgr)
-    if not success:
+    try:
+        from PIL import Image
+
+        buf = io.BytesIO()
+        img = Image.fromarray(image_rgb)
+        img.save(buf, format="PNG")
+        b64_str = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{b64_str}"
+    except Exception:
+        if cv2 is not None:
+            image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+            success, buffer = cv2.imencode(".png", image_bgr)
+            if success:
+                b64_str = base64.b64encode(buffer).decode("ascii")
+                return f"data:image/png;base64,{b64_str}"
         return ""
-    b64_str = base64.b64encode(buffer).decode("ascii")
-    return f"data:image/png;base64,{b64_str}"
 
 
 def _compute_text_edge_sharpness(
