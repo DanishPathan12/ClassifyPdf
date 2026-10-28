@@ -241,3 +241,86 @@ class UnifiedAnalysisResponse(BaseModel):
     metadata: MetadataContainer
     test_cases: TestCasesContainer | None = Field(default=None)
     summary: UnifiedSummary
+
+    # Three-Layer Forensic Schema
+    overall_assessment: OverallAssessment | None = Field(
+        default=None,
+        description="High-level forensic status: confirmed_integrity_failure | suspicious_indicators_detected | inconclusive | no_suspicious_indicators_detected",
+    )
+    analyses: ThreeLayerAnalyses | None = Field(
+        default=None,
+        description="Detailed findings and limitations across Structural, Visual, and Verification layers",
+    )
+    key_findings: list[ForensicFinding] = Field(
+        default_factory=list,
+        description="Prioritized list of key structural, visual, or verification findings",
+    )
+    recommended_next_steps: list[str] = Field(
+        default_factory=list,
+        description="Actionable next steps recommended based on forensic assessment",
+    )
+
+
+class OverallAssessment(BaseModel):
+    """Overall assessment status and score."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: str = Field(
+        ...,
+        description="confirmed_integrity_failure | suspicious_indicators_detected | inconclusive | no_suspicious_indicators_detected",
+    )
+    summary: str = Field(..., description="Evidence-based assessment narrative")
+    score: float | None = Field(default=None, description="Calibrated confidence score from 0.0 to 1.0")
+    score_explanation: str | None = Field(default=None, description="Explanation of score calculation and limitations")
+
+
+class StructuralAnalysisLayer(BaseModel):
+    """Layer 1: Structural Analysis results."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: str = Field(default="completed", description="completed | partial | failed | skipped")
+    summary: str = Field(default="", description="Structural findings summary")
+    findings: list[ForensicFinding] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class VisualAnalysisLayer(BaseModel):
+    """Layer 2: Pixel-Level and Visual Analysis results."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: str = Field(default="completed", description="completed | partial | failed | skipped")
+    summary: str = Field(default="", description="Visual analysis summary")
+    findings: list[ForensicFinding] = Field(default_factory=list)
+    page_previews: list[dict[str, Any]] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class VerificationAnalysisLayer(BaseModel):
+    """Layer 3: Independent Verification results."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: str = Field(default="unavailable", description="completed | partial | unavailable | failed")
+    summary: str = Field(default="", description="Verification summary")
+    signature_results: list[SignatureValidationResult] = Field(default_factory=list)
+    original_comparison: dict[str, Any] | None = Field(default=None)
+    hash_verification: dict[str, Any] | None = Field(default=None)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class ThreeLayerAnalyses(BaseModel):
+    """Container grouping all three forensic analysis layers."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    structural: StructuralAnalysisLayer
+    visual: VisualAnalysisLayer
+    verification: VerificationAnalysisLayer
+
+
+UnifiedAnalysisResponse.model_rebuild()
+
+

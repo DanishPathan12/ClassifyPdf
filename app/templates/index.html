@@ -3,27 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PDF & Document Forensic Analyzer</title>
+  <title>PDF Forensic Tampering & Integrity Analyzer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-primary: #0f172a;
-      --bg-secondary: #1e293b;
-      --bg-card: #1e293b;
-      --border-color: #334155;
-      --text-primary: #f8fafc;
+      --bg-color: #0b0f19;
+      --card-bg: #151c2c;
+      --card-bg-subtle: #1e293b;
+      --border-color: #27354f;
+      --text-main: #f8fafc;
       --text-muted: #94a3b8;
-      --accent-blue: #3b82f6;
-      --accent-blue-hover: #2563eb;
-      --severity-high: #ef4444;
-      --severity-medium: #f59e0b;
-      --severity-low: #eab308;
-      --severity-info: #06b6d4;
-      --cat-confirmed: #10b981;
-      --cat-suspicious: #f97316;
-      --cat-inconclusive: #64748b;
+      --accent-primary: #38bdf8;
+      --accent-hover: #0ea5e9;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --success: #10b981;
+      --info: #64748b;
     }
 
     * {
@@ -34,78 +31,65 @@
 
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: var(--bg-primary);
-      color: var(--text-primary);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      line-height: 1.5;
       padding: 2rem 1rem;
     }
 
     .container {
       max-width: 1100px;
       margin: 0 auto;
-      width: 100%;
     }
 
     header {
-      text-align: center;
       margin-bottom: 2rem;
+      text-align: center;
     }
 
     header h1 {
       font-size: 2.2rem;
       font-weight: 700;
-      background: linear-gradient(135deg, #60a5fa, #a855f7);
+      letter-spacing: -0.025em;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
-      margin-bottom: 0.5rem;
     }
 
     header p {
       color: var(--text-muted);
-      font-size: 1rem;
+      font-size: 1.05rem;
     }
 
-    .upload-card {
-      background: var(--bg-secondary);
+    .card {
+      background-color: var(--card-bg);
       border: 1px solid var(--border-color);
-      border-radius: 16px;
-      padding: 2rem;
-      margin-bottom: 2rem;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     }
 
     .drop-zone {
-      border: 2px dashed #475569;
-      border-radius: 12px;
+      border: 2px dashed var(--border-color);
+      border-radius: 8px;
       padding: 2.5rem 1.5rem;
       text-align: center;
       cursor: pointer;
       transition: all 0.2s ease;
-      background: rgba(15, 23, 42, 0.5);
+      background-color: rgba(30, 41, 59, 0.5);
     }
 
     .drop-zone:hover, .drop-zone.dragover {
-      border-color: var(--accent-blue);
-      background: rgba(59, 130, 246, 0.08);
+      border-color: var(--accent-primary);
+      background-color: rgba(56, 189, 248, 0.05);
     }
 
     .drop-icon {
-      font-size: 3rem;
-      margin-bottom: 1rem;
+      font-size: 2.5rem;
       display: block;
-    }
-
-    .drop-zone h3 {
-      font-size: 1.15rem;
-      font-weight: 600;
-      margin-bottom: 0.5rem;
-    }
-
-    .drop-zone p {
-      color: var(--text-muted);
-      font-size: 0.88rem;
+      margin-bottom: 0.75rem;
     }
 
     input[type="file"] {
@@ -114,105 +98,125 @@
 
     .preview-container {
       display: none;
-      margin-top: 1.5rem;
-      padding: 1rem;
-      background: #0b1120;
-      border-radius: 10px;
-      border: 1px solid var(--border-color);
       align-items: center;
-      gap: 1.25rem;
-    }
-
-    .preview-img {
-      max-width: 140px;
-      max-height: 140px;
-      object-fit: contain;
+      gap: 1rem;
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background-color: var(--card-bg-subtle);
       border-radius: 8px;
       border: 1px solid var(--border-color);
-      background: #020617;
     }
 
     .pdf-badge-icon {
-      width: 70px;
-      height: 70px;
-      background: #ef4444;
+      width: 48px;
+      height: 48px;
+      background: #dc2626;
       color: white;
-      border-radius: 12px;
+      font-weight: 700;
+      border-radius: 6px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-weight: 700;
-      font-size: 1.2rem;
-      flex-shrink: 0;
+      font-size: 0.8rem;
+    }
+
+    .preview-img {
+      width: 48px;
+      height: 48px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
     }
 
     .file-meta {
-      flex: 1;
+      flex-grow: 1;
       overflow: hidden;
     }
 
     .file-meta .name {
       font-weight: 600;
-      font-size: 1rem;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-bottom: 0.25rem;
     }
 
     .file-meta .size {
-      color: var(--text-muted);
       font-size: 0.85rem;
-    }
-
-    .options-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1rem;
-      margin-top: 1.5rem;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .select-group {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .select-group label {
-      font-size: 0.88rem;
       color: var(--text-muted);
     }
 
-    select {
-      background: #0f172a;
-      border: 1px solid var(--border-color);
-      color: var(--text-primary);
-      padding: 0.55rem 0.9rem;
-      border-radius: 8px;
-      font-size: 0.88rem;
-      outline: none;
+    .collapsible-options {
+      margin-top: 1rem;
+      border-top: 1px solid var(--border-color);
+      padding-top: 1rem;
+    }
+
+    .collapsible-options summary {
       cursor: pointer;
+      color: var(--accent-primary);
+      font-size: 0.95rem;
+      font-weight: 600;
+      user-select: none;
+      margin-bottom: 0.75rem;
+    }
+
+    .options-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 0.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .options-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .input-group label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .input-group input[type="text"],
+    .input-group select {
+      background-color: var(--card-bg-subtle);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 0.6rem 0.8rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      outline: none;
+    }
+
+    .input-group input[type="text"]:focus,
+    .input-group select:focus {
+      border-color: var(--accent-primary);
     }
 
     .btn-analyze {
-      background: var(--accent-blue);
+      background: linear-gradient(135deg, #38bdf8 0%, #2563eb 100%);
       color: white;
       border: none;
       border-radius: 8px;
-      padding: 0.75rem 1.8rem;
+      padding: 0.85rem 1.75rem;
       font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
-      display: inline-flex;
+      transition: opacity 0.2s;
+      display: flex;
       align-items: center;
+      justify-content: center;
       gap: 0.5rem;
-      transition: background 0.2s ease;
-    }
-
-    .btn-analyze:hover {
-      background: var(--accent-blue-hover);
+      width: 100%;
+      margin-top: 1.25rem;
     }
 
     .btn-analyze:disabled {
@@ -227,7 +231,7 @@
       border: 2px solid rgba(255, 255, 255, 0.3);
       border-radius: 50%;
       border-top-color: white;
-      animation: spin 0.8s linear infinite;
+      animation: spin 0.8s ease-in-out infinite;
     }
 
     @keyframes spin {
@@ -236,81 +240,224 @@
 
     .error-banner {
       display: none;
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid var(--severity-high);
+      background-color: rgba(239, 68, 68, 0.1);
+      border: 1px solid var(--danger);
       color: #fca5a5;
-      padding: 1rem 1.25rem;
-      border-radius: 10px;
-      margin-bottom: 2rem;
-      font-size: 0.95rem;
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
     }
 
     /* Results Dashboard */
     .results-section {
       display: none;
-      animation: fadeIn 0.4s ease;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
     }
 
     .summary-banner {
-      background: linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(15, 23, 42, 0.9));
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      padding: 1.5rem 2rem;
-      margin-bottom: 1.5rem;
       display: flex;
       flex-wrap: wrap;
-      align-items: center;
       justify-content: space-between;
-      gap: 1rem;
-    }
-
-    .summary-text h2 {
-      font-size: 1.25rem;
-      font-weight: 600;
-      margin-bottom: 0.35rem;
-    }
-
-    .summary-text p {
-      color: var(--text-muted);
-      font-size: 0.9rem;
-    }
-
-    .chips-group {
-      display: flex;
-      gap: 0.6rem;
-    }
-
-    .chip {
-      padding: 0.35rem 0.85rem;
-      border-radius: 20px;
-      font-size: 0.82rem;
-      font-weight: 600;
-      display: inline-flex;
       align-items: center;
-      gap: 0.4rem;
+      gap: 1rem;
+      border-left: 6px solid var(--accent-primary);
+      background-color: var(--card-bg);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+      border: 1px solid var(--border-color);
+      border-left-width: 6px;
     }
 
-    .chip-confirmed {
-      background: rgba(16, 185, 129, 0.15);
-      color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.3);
+    .status-confirmed-fail { border-left-color: var(--danger) !important; }
+    .status-suspicious { border-left-color: var(--warning) !important; }
+    .status-clean { border-left-color: var(--success) !important; }
+    .status-inconclusive { border-left-color: var(--info) !important; }
+
+    .summary-title-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.3rem;
     }
 
-    .chip-suspicious {
-      background: rgba(249, 115, 22, 0.15);
-      color: #fb923c;
-      border: 1px solid rgba(249, 115, 22, 0.3);
+    .status-pill {
+      display: inline-block;
+      padding: 0.25rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
-    .chip-inconclusive {
-      background: rgba(100, 116, 139, 0.15);
-      color: #94a3b8;
-      border: 1px solid rgba(100, 116, 139, 0.3);
+    .pill-confirmed-fail { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid var(--danger); }
+    .pill-suspicious { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid var(--warning); }
+    .pill-clean { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid var(--success); }
+    .pill-inconclusive { background: rgba(100, 116, 139, 0.2); color: #94a3b8; border: 1px solid var(--info); }
+
+    .score-badge {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    /* Tabs Styling */
+    .tabs-nav {
+      display: flex;
+      gap: 0.5rem;
+      border-bottom: 1px solid var(--border-color);
+      margin-bottom: 1.25rem;
+      overflow-x: auto;
+    }
+
+    .tab-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      font-weight: 600;
+      padding: 0.75rem 1.25rem;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-main);
+    }
+
+    .tab-btn.active {
+      color: var(--accent-primary);
+      border-bottom-color: var(--accent-primary);
+    }
+
+    .tab-pane {
+      display: none;
+    }
+
+    .tab-pane.active {
+      display: block;
+    }
+
+    /* Visual Viewer */
+    .visual-viewer {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      background: #090e17;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .viewer-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .viewer-toggle-btn {
+      background: var(--card-bg-subtle);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 0.45rem 0.9rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+
+    .viewer-toggle-btn.active {
+      background: var(--accent-primary);
+      color: #0b0f19;
+      border-color: var(--accent-primary);
+    }
+
+    .rendered-page-frame {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      max-height: 650px;
+      overflow: auto;
+      background: #020617;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      padding: 1rem;
+    }
+
+    .rendered-page-img {
+      max-width: 100%;
+      height: auto;
+      object-fit: contain;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Diff Visual Box */
+    .diff-container {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .diff-img-preview {
+      max-width: 100%;
+      border-radius: 6px;
+      border: 1px solid var(--danger);
+    }
+
+    /* Findings and Cards */
+    .finding-card {
+      background: var(--card-bg-subtle);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .finding-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .finding-title {
+      font-weight: 600;
+      font-size: 1rem;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.55rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-high { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .badge-medium { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .badge-low { background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
+    .badge-info { background: rgba(100, 116, 139, 0.2); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.4); }
+
+    .evidence-box {
+      background: #060911;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 0.75rem;
+      margin-top: 0.5rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: #93c5fd;
+      overflow-x: auto;
+      max-height: 250px;
     }
 
     .grid-2col {
@@ -326,51 +473,12 @@
       }
     }
 
-    .card {
-      background: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: 14px;
-      padding: 1.5rem;
-    }
-
-    .card h3 {
-      font-size: 1.05rem;
-      font-weight: 600;
-      margin-bottom: 1rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .date-block {
-      background: #0f172a;
-      border: 1px solid var(--border-color);
-      border-radius: 10px;
-      padding: 1rem;
-      margin-bottom: 0.75rem;
-    }
-
-    .date-label {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--text-muted);
-      margin-bottom: 0.25rem;
-      font-weight: 600;
-    }
-
-    .date-val {
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: #e2e8f0;
-    }
-
     .fact-item {
       display: flex;
       justify-content: space-between;
-      padding: 0.6rem 0;
-      border-bottom: 1px solid rgba(51, 65, 85, 0.5);
-      font-size: 0.88rem;
+      padding: 0.45rem 0;
+      border-bottom: 1px solid rgba(39, 53, 79, 0.5);
+      font-size: 0.85rem;
     }
 
     .fact-item:last-child {
@@ -383,109 +491,35 @@
 
     .fact-val {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.82rem;
-      max-width: 250px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      text-align: right;
+      max-width: 60%;
+      word-break: break-all;
     }
 
-    .copy-btn {
-      background: transparent;
-      border: none;
-      color: var(--accent-blue);
-      cursor: pointer;
-      font-size: 0.75rem;
-      margin-left: 0.4rem;
-    }
-
-    /* Findings List */
-    .finding-card {
-      background: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
+    .steps-card {
+      background: rgba(56, 189, 248, 0.05);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      border-radius: 8px;
       padding: 1.25rem;
-      margin-bottom: 1rem;
-      transition: border-color 0.2s ease;
+      margin-bottom: 1.5rem;
     }
 
-    .finding-card:hover {
-      border-color: #475569;
-    }
-
-    .finding-header {
+    .steps-card h4 {
+      color: var(--accent-primary);
+      margin-bottom: 0.5rem;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      margin-bottom: 0.6rem;
-      flex-wrap: wrap;
       gap: 0.5rem;
     }
 
-    .finding-title {
-      font-size: 1rem;
-      font-weight: 600;
-      color: #f1f5f9;
-    }
-
-    .badges {
-      display: flex;
-      gap: 0.4rem;
-    }
-
-    .badge {
-      font-size: 0.72rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      padding: 0.2rem 0.55rem;
-      border-radius: 6px;
-      letter-spacing: 0.04em;
-    }
-
-    .badge-high { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
-    .badge-medium { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
-    .badge-low { background: rgba(234, 179, 8, 0.2); color: #fde047; border: 1px solid rgba(234, 179, 8, 0.4); }
-    .badge-info { background: rgba(6, 182, 212, 0.2); color: #67e8f9; border: 1px solid rgba(6, 182, 212, 0.4); }
-
-    .finding-desc {
+    .steps-list {
+      padding-left: 1.25rem;
       color: #cbd5e1;
       font-size: 0.9rem;
-      line-height: 1.45;
-      margin-bottom: 0.75rem;
     }
 
-    .evidence-box {
-      background: #090e17;
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 0.75rem 1rem;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.78rem;
-      color: #94a3b8;
-      overflow-x: auto;
-    }
-
-    /* Accordion */
-    details {
-      background: #0f172a;
-      border: 1px solid var(--border-color);
-      border-radius: 10px;
-      margin-top: 1.5rem;
-      overflow: hidden;
-    }
-
-    summary {
-      padding: 1rem;
-      font-weight: 600;
-      font-size: 0.95rem;
-      cursor: pointer;
-      user-select: none;
-      outline: none;
-      color: var(--text-muted);
-    }
-
-    summary:hover {
-      color: var(--text-primary);
+    .steps-list li {
+      margin-bottom: 0.4rem;
     }
 
     .raw-json {
@@ -496,17 +530,7 @@
       color: #38bdf8;
       overflow-x: auto;
       max-height: 350px;
-    }
-
-    .img-modal-preview {
-      max-width: 100%;
-      max-height: 250px;
-      object-fit: contain;
-      border-radius: 8px;
-      margin-top: 0.75rem;
-      border: 1px solid var(--border-color);
-      background: #090e17;
-      display: block;
+      border-radius: 6px;
     }
   </style>
 </head>
@@ -514,21 +538,21 @@
   <div class="container">
     <header>
       <h1>PDF & Document Forensic Analyzer</h1>
-      <p>Instant forensic metadata validation & tampering detection for PDFs and Images</p>
+      <p>Three-Layer Evidence Verification: Structural Object Audit, Visual Pixel Analysis & Digital Signatures</p>
     </header>
 
     <div class="error-banner" id="errorBanner"></div>
 
-    <div class="upload-card">
+    <div class="card">
       <div class="drop-zone" id="dropZone">
         <span class="drop-icon">📄</span>
-        <h3>Upload a PDF or Image Document</h3>
-        <p>Drag and drop a PDF, JPEG, PNG, or WebP file here, or click to browse</p>
-        <input type="file" id="fileInput" accept=".pdf,image/png,image/jpeg,image/jpg,image/webp,image/tiff">
+        <h3>Upload PDF for Forensic Analysis</h3>
+        <p>Drag and drop a PDF file here, or click to browse</p>
+        <input type="file" id="fileInput" accept=".pdf,image/png,image/jpeg,image/jpg,image/webp">
       </div>
 
       <div class="preview-container" id="previewContainer">
-        <div id="pdfIcon" class="pdf-badge-icon" style="display: none;">PDF</div>
+        <div id="pdfIcon" class="pdf-badge-icon">PDF</div>
         <img id="imagePreview" class="preview-img" style="display: none;" alt="Preview">
         <div class="file-meta">
           <div class="name" id="fileName">-</div>
@@ -536,106 +560,183 @@
         </div>
       </div>
 
-      <div class="options-row">
-        <div class="select-group">
-          <label for="docTypeSelect">Document Context:</label>
-          <select id="docTypeSelect">
-            <option value="">Auto-detect from file</option>
-            <option value="official">Official Record (Bank Receipt, Invoice, Govt ID)</option>
-            <option value="standard">Standard Document (Resume, Contract Draft, Report)</option>
-          </select>
+      <!-- Optional Independent Verification Accordion -->
+      <details class="collapsible-options">
+        <summary>⚙️ Independent Verification Options (Optional)</summary>
+        <div class="options-grid">
+          <div class="input-group">
+            <label for="originalFileInput">Trusted Original PDF (for pixel & text diff):</label>
+            <input type="file" id="originalFileInput" accept=".pdf" style="display: block; font-size: 0.85rem; color: #94a3b8;">
+          </div>
+          <div class="input-group">
+            <label for="expectedHashInput">Expected Reference SHA-256 Hash:</label>
+            <input type="text" id="expectedHashInput" placeholder="e.g. 5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8">
+          </div>
+          <div class="input-group">
+            <label for="docTypeSelect">Document Context:</label>
+            <select id="docTypeSelect">
+              <option value="">Auto-detect from file</option>
+              <option value="official">Official Record (Bank Receipt, Invoice, Govt ID)</option>
+              <option value="standard">Standard Document (Resume, Contract, Report)</option>
+            </select>
+          </div>
         </div>
+      </details>
 
-        <button class="btn-analyze" id="btnAnalyze" disabled>
-          <span class="spinner" id="btnSpinner"></span>
-          <span id="btnText">Analyze Document</span>
-        </button>
-      </div>
+      <button class="btn-analyze" id="btnAnalyze" disabled>
+        <span class="spinner" id="btnSpinner"></span>
+        <span id="btnText">Execute Three-Layer Forensic Analysis</span>
+      </button>
     </div>
 
     <!-- Results Section -->
     <div class="results-section" id="resultsSection">
-      <div class="summary-banner">
-        <div class="summary-text">
-          <h2 id="summaryTitle">Analysis Complete</h2>
-          <p id="summaryOverall">-</p>
+      <!-- High Level Summary Banner -->
+      <div class="summary-banner" id="summaryBanner">
+        <div>
+          <div class="summary-title-row">
+            <span class="status-pill" id="statusPill">INCONCLUSIVE</span>
+            <span class="score-badge" id="scoreBadge">Calibrated Confidence: 0%</span>
+          </div>
+          <p id="summaryOverall" style="color: #cbd5e1; font-size: 0.95rem; margin-top: 0.4rem;">-</p>
         </div>
-        <div class="chips-group">
-          <span class="chip chip-confirmed" id="chipConfirmed">0 Confirmed</span>
-          <span class="chip chip-suspicious" id="chipSuspicious">0 Suspicious</span>
-          <span class="chip chip-inconclusive" id="chipInconclusive">0 Inconclusive</span>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <span class="badge badge-info" id="badgeStructStatus">Structural: -</span>
+          <span class="badge badge-info" id="badgeVisStatus">Visual: -</span>
+          <span class="badge badge-info" id="badgeVerStatus">Verification: -</span>
         </div>
       </div>
 
-      <div class="grid-2col">
-        <!-- Human Readable Dates -->
+      <!-- Actionable Next Steps -->
+      <div class="steps-card" id="stepsCard">
+        <h4>💡 Recommended Forensic Actions</h4>
+        <ul class="steps-list" id="stepsList"></ul>
+      </div>
+
+      <!-- Analysis Navigation Tabs -->
+      <div class="tabs-nav">
+        <button class="tab-btn active" data-tab="tab-structural">🧱 1. Structural Analysis</button>
+        <button class="tab-btn" data-tab="tab-visual">👁️ 2. Visual & Pixel Analysis</button>
+        <button class="tab-btn" data-tab="tab-verification">🛡️ 3. Independent Verification</button>
+        <button class="tab-btn" data-tab="tab-findings">🔍 All Forensic Findings</button>
+      </div>
+
+      <!-- Tab 1: Structural Analysis -->
+      <div class="tab-pane active" id="tab-structural">
         <div class="card">
-          <h3>🕒 Standardized Document Dates</h3>
-          <div class="date-block">
-            <div class="date-label">Created Date</div>
-            <div class="date-val" id="creationDateVal">Not available</div>
-          </div>
-          <div class="date-block">
-            <div class="date-label">Modified Date</div>
-            <div class="date-val" id="modDateVal">Not available</div>
-          </div>
-          <p id="dateDiffNote" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;"></p>
+          <h3>🧱 Layer 1: PDF Internal Structure & Object Audit</h3>
+          <p id="structuralSummary" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">-</p>
+          <div id="structuralFindingsList"></div>
         </div>
+      </div>
 
-        <!-- File Facts -->
+      <!-- Tab 2: Visual Analysis -->
+      <div class="tab-pane" id="tab-visual">
         <div class="card">
-          <h3>📋 File Facts & Preview</h3>
-          <div class="fact-item">
-            <span class="fact-name">File Name</span>
-            <span class="fact-val" id="factName">-</span>
+          <h3>👁️ Layer 2: Pixel-Level Rendering & Heatmap Inspection</h3>
+          <p id="visualSummary" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">-</p>
+
+          <div class="visual-viewer" id="visualViewer">
+            <div class="viewer-controls">
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <label for="pageSelect" style="font-size: 0.85rem; color: var(--text-muted);">Page:</label>
+                <select id="pageSelect" style="background: var(--card-bg-subtle); color: white; border: 1px solid var(--border-color); border-radius: 4px; padding: 0.3rem 0.6rem;"></select>
+              </div>
+              <div style="display: flex; gap: 0.5rem;">
+                <button class="viewer-toggle-btn active" id="btnShowOriginal">Original Render</button>
+                <button class="viewer-toggle-btn" id="btnShowOverlay">Suspicious Heatmap / Overlay</button>
+              </div>
+            </div>
+
+            <div class="rendered-page-frame">
+              <img id="renderedPageImg" class="rendered-page-img" src="" alt="Rendered Page">
+            </div>
+
+            <div id="visualRegionNotes" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;"></div>
           </div>
-          <div class="fact-item">
-            <span class="fact-name">File Size</span>
-            <span class="fact-val" id="factSize">-</span>
-          </div>
-          <div class="fact-item">
-            <span class="fact-name">Format / Version</span>
-            <span class="fact-val" id="factVersion">-</span>
-          </div>
-          <div class="fact-item">
-            <span class="fact-name">Page Count</span>
-            <span class="fact-val" id="factPages">-</span>
-          </div>
-          <div class="fact-item">
-            <span class="fact-name">SHA-256</span>
-            <span class="fact-val" id="factSha256">-</span>
-          </div>
-          <img id="resultImagePreview" class="img-modal-preview" style="display: none;" alt="Uploaded Document Preview">
+
+          <div id="visualFindingsList"></div>
         </div>
       </div>
 
-      <!-- Edit Detection Test Cases -->
-      <div class="card" id="testCasesCard" style="display: none; margin-bottom: 1.5rem;">
-        <h3>🛡️ Edit Detection Forensic Analysis (3 Test Cases)</h3>
-        <div id="testCasesContainer" style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;"></div>
+      <!-- Tab 3: Independent Verification -->
+      <div class="tab-pane" id="tab-verification">
+        <div class="card">
+          <h3>🛡️ Layer 3: Independent Cryptographic & Original Verification</h3>
+          <p id="verificationSummary" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;">-</p>
+
+          <!-- Digital Signature Card -->
+          <div class="finding-card">
+            <div class="finding-header">
+              <span class="finding-title">Digital Signature Cryptography</span>
+              <span class="badge badge-info" id="sigStatusBadge">Not Evaluated</span>
+            </div>
+            <div id="sigDetailsBox" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;"></div>
+          </div>
+
+          <!-- Trusted Original Diff Card -->
+          <div class="finding-card">
+            <div class="finding-header">
+              <span class="finding-title">Trusted-Original Comparison</span>
+              <span class="badge badge-info" id="origCompStatusBadge">Unavailable</span>
+            </div>
+            <p id="origCompSummary" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">No trusted reference original PDF provided.</p>
+            <div id="origDiffPreviewBox" class="diff-container" style="display: none;"></div>
+          </div>
+
+          <!-- Hash Verification Card -->
+          <div class="finding-card">
+            <div class="finding-header">
+              <span class="finding-title">SHA-256 Hash Integrity</span>
+              <span class="badge badge-info" id="hashStatusBadge">Reference Not Provided</span>
+            </div>
+            <p id="hashSummaryText" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">-</p>
+          </div>
+        </div>
       </div>
 
-      <!-- Findings List -->
-      <div class="card">
-        <h3>🔍 Metadata Forensic Flags</h3>
-        <div id="findingsList"></div>
-      </div>
+      <!-- Tab 4: All Findings & Metadata -->
+      <div class="tab-pane" id="tab-findings">
+        <div class="grid-2col">
+          <!-- Standardized Dates -->
+          <div class="card">
+            <h3>🕒 Standardized Document Dates</h3>
+            <div class="fact-item"><span class="fact-name">Creation Date:</span><span class="fact-val" id="creationDateVal">-</span></div>
+            <div class="fact-item"><span class="fact-name">Modification Date:</span><span class="fact-val" id="modDateVal">-</span></div>
+          </div>
 
-      <!-- Raw Metadata Accordion -->
-      <details>
-        <summary>View Complete Raw Metadata (JSON)</summary>
-        <pre class="raw-json" id="rawMetadataJson"></pre>
-      </details>
+          <!-- File Facts -->
+          <div class="card">
+            <h3>📋 Document Properties</h3>
+            <div class="fact-item"><span class="fact-name">Filename</span><span class="fact-val" id="factName">-</span></div>
+            <div class="fact-item"><span class="fact-name">File Size</span><span class="fact-val" id="factSize">-</span></div>
+            <div class="fact-item"><span class="fact-name">PDF Version</span><span class="fact-val" id="factVersion">-</span></div>
+            <div class="fact-item"><span class="fact-name">Page Count</span><span class="fact-val" id="factPages">-</span></div>
+            <div class="fact-item"><span class="fact-name">SHA-256</span><span class="fact-val" id="factSha256">-</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>🔍 Complete Forensic Findings</h3>
+          <div id="allFindingsList"></div>
+        </div>
+
+        <!-- Raw Metadata Accordion -->
+        <details class="card">
+          <summary style="cursor: pointer; font-weight: 600; color: var(--accent-primary);">View Complete Raw Metadata (JSON)</summary>
+          <pre class="raw-json" id="rawMetadataJson" style="margin-top: 1rem;"></pre>
+        </details>
+      </div>
     </div>
   </div>
 
   <script>
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
+    const originalFileInput = document.getElementById('originalFileInput');
+    const expectedHashInput = document.getElementById('expectedHashInput');
+    const docTypeSelect = document.getElementById('docTypeSelect');
     const previewContainer = document.getElementById('previewContainer');
-    const pdfIcon = document.getElementById('pdfIcon');
-    const imagePreview = document.getElementById('imagePreview');
-    const resultImagePreview = document.getElementById('resultImagePreview');
     const fileName = document.getElementById('fileName');
     const fileSize = document.getElementById('fileSize');
     const btnAnalyze = document.getElementById('btnAnalyze');
@@ -643,37 +744,26 @@
     const btnText = document.getElementById('btnText');
     const errorBanner = document.getElementById('errorBanner');
     const resultsSection = document.getElementById('resultsSection');
-    const docTypeSelect = document.getElementById('docTypeSelect');
 
     let currentFile = null;
+    let globalPreviws = [];
+    let currentPreviewMode = 'original'; // 'original' or 'overlay'
 
     dropZone.addEventListener('click', () => fileInput.click());
-
-    dropZone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      dropZone.classList.add('dragover');
-    });
-
-    dropZone.addEventListener('dragleave', () => {
-      dropZone.classList.remove('dragover');
-    });
-
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       dropZone.classList.remove('dragover');
-      if (e.dataTransfer.files.length > 0) {
-        handleFileSelect(e.dataTransfer.files[0]);
-      }
+      if (e.dataTransfer.files.length > 0) handleFileSelect(e.dataTransfer.files[0]);
     });
 
     fileInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) {
-        handleFileSelect(e.target.files[0]);
-      }
+      if (e.target.files.length > 0) handleFileSelect(e.target.files[0]);
     });
 
     function formatBytes(bytes) {
-      if (bytes === 0) return '0 Bytes';
+      if (!bytes || bytes === 0) return '0 Bytes';
       const k = 1024;
       const sizes = ['Bytes', 'KB', 'MB', 'GB'];
       const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -687,25 +777,19 @@
       previewContainer.style.display = 'flex';
       errorBanner.style.display = 'none';
       resultsSection.style.display = 'none';
-
-      if (file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          imagePreview.src = e.target.result;
-          imagePreview.style.display = 'block';
-          resultImagePreview.src = e.target.result;
-          resultImagePreview.style.display = 'block';
-          pdfIcon.style.display = 'none';
-        };
-        reader.readAsDataURL(file);
-      } else {
-        imagePreview.style.display = 'none';
-        resultImagePreview.style.display = 'none';
-        pdfIcon.style.display = 'flex';
-      }
-
       btnAnalyze.disabled = false;
     }
+
+    // Tab Navigation
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        const targetId = btn.getAttribute('data-tab');
+        document.getElementById(targetId).classList.add('active');
+      });
+    });
 
     btnAnalyze.addEventListener('click', async () => {
       if (!currentFile) return;
@@ -713,13 +797,13 @@
       errorBanner.style.display = 'none';
       btnAnalyze.disabled = true;
       btnSpinner.style.display = 'inline-block';
-      btnText.textContent = 'Analyzing...';
+      btnText.textContent = 'Executing Three Forensic Layers...';
 
       const formData = new FormData();
       formData.append('file', currentFile);
-      if (docTypeSelect.value) {
-        formData.append('doc_type', docTypeSelect.value);
-      }
+      if (docTypeSelect.value) formData.append('doc_type', docTypeSelect.value);
+      if (originalFileInput.files.length > 0) formData.append('original_file', originalFileInput.files[0]);
+      if (expectedHashInput.value.trim()) formData.append('expected_hash', expectedHashInput.value.trim());
 
       try {
         const response = await fetch('/analyze', {
@@ -728,147 +812,240 @@
         });
 
         const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Analysis request failed');
 
-        if (!response.ok) {
-          throw new Error(data.detail || 'Analysis request failed');
-        }
-
-        renderResults(data);
+        renderThreeLayerResults(data);
       } catch (err) {
         errorBanner.textContent = 'Error: ' + err.message;
         errorBanner.style.display = 'block';
       } finally {
         btnAnalyze.disabled = false;
         btnSpinner.style.display = 'none';
-        btnText.textContent = 'Analyze Document';
+        btnText.textContent = 'Execute Three-Layer Forensic Analysis';
       }
     });
 
-    function renderResults(res) {
+    function renderThreeLayerResults(res) {
       resultsSection.style.display = 'block';
       resultsSection.scrollIntoView({ behavior: 'smooth' });
 
-      // Summary
-      if (res.verdict) {
-        const vText = res.verdict.toUpperCase().replace(/_/g, ' ');
-        const confPercent = Math.round((res.confidence || 0) * 100);
-        document.getElementById('summaryTitle').textContent = `Verdict: ${vText} (${confPercent}% Confidence)`;
-      } else if (res.summary.classification) {
-        document.getElementById('summaryTitle').textContent = `Classification: ${res.summary.classification.toUpperCase().replace(/_/g, ' ')}`;
+      // 1. Overall Assessment Banner
+      const assess = res.overall_assessment || {};
+      const statusPill = document.getElementById('statusPill');
+      const scoreBadge = document.getElementById('scoreBadge');
+      const banner = document.getElementById('summaryBanner');
+
+      banner.className = 'summary-banner';
+      const rawStatus = (assess.status || res.verdict || 'inconclusive').toLowerCase();
+
+      if (rawStatus.includes('confirmed') || rawStatus === 'likely_edited') {
+        banner.classList.add('status-confirmed-fail');
+        statusPill.className = 'status-pill pill-confirmed-fail';
+        statusPill.textContent = 'Confirmed Integrity Failure';
+      } else if (rawStatus.includes('suspicious')) {
+        banner.classList.add('status-suspicious');
+        statusPill.className = 'status-pill pill-suspicious';
+        statusPill.textContent = 'Suspicious Indicators Detected';
+      } else if (rawStatus.includes('no_suspicious') || rawStatus === 'no_edit_evidence_found') {
+        banner.classList.add('status-clean');
+        statusPill.className = 'status-pill pill-clean';
+        statusPill.textContent = 'No Suspicious Indicators Detected';
       } else {
-        document.getElementById('summaryTitle').textContent = 'Analysis Complete';
-      }
-      document.getElementById('summaryOverall').textContent = res.summary.overall || res.summary;
-      document.getElementById('chipConfirmed').textContent = `${res.summary.confirmed || 0} Confirmed`;
-      document.getElementById('chipSuspicious').textContent = `${res.summary.suspicious || 0} Suspicious`;
-      document.getElementById('chipInconclusive').textContent = `${res.summary.inconclusive || 0} Inconclusive`;
-
-      // Render Test Cases
-      const tcCard = document.getElementById('testCasesCard');
-      const tcContainer = document.getElementById('testCasesContainer');
-      if (res.test_cases) {
-        tcCard.style.display = 'block';
-        tcContainer.innerHTML = '';
-
-        // TC 1: Incremental Revisions
-        const tc1 = res.test_cases.incremental_revisions;
-        const tc1Div = document.createElement('div');
-        tc1Div.className = 'finding-card';
-        tc1Div.innerHTML = `
-          <div class="finding-header">
-            <span class="finding-title">1. Incremental Revisions (${tc1.revision_count} Revision${tc1.revision_count > 1 ? 's' : ''})</span>
-            <span class="badge ${tc1.status === 'changes_detected' ? 'badge-high' : 'badge-info'}">${tc1.status.replace(/_/g, ' ')}</span>
-          </div>
-          <p style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 0.5rem;">
-            Previous revision recovered: <strong>${tc1.previous_revision_recovered ? 'Yes' : 'No'}</strong> | Detected changes: <strong>${tc1.changes.length}</strong>
-          </p>
-          ${tc1.changes.length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(tc1.changes, null, 2))}</pre>` : ''}
-          ${tc1.limitations.length > 0 ? `<p style="font-size: 0.8rem; color: #94a3b8;">Limitations: ${escapeHtml(tc1.limitations.join('; '))}</p>` : ''}
-        `;
-        tcContainer.appendChild(tc1Div);
-
-        // TC 2: Digital Signatures
-        const tc2 = res.test_cases.digital_signatures;
-        const tc2Div = document.createElement('div');
-        tc2Div.className = 'finding-card';
-        tc2Div.innerHTML = `
-          <div class="finding-header">
-            <span class="finding-title">2. Digital Signatures (${tc2.signatures_found} Signature${tc2.signatures_found > 1 ? 's' : ''})</span>
-            <span class="badge ${tc2.status === 'post_signature_changes_detected' ? 'badge-high' : (tc2.status === 'signed_intact_no_later_changes' ? 'badge-info' : 'badge-low')}">${tc2.status.replace(/_/g, ' ')}</span>
-          </div>
-          ${tc2.signature_results.length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(tc2.signature_results, null, 2))}</pre>` : '<p style="font-size: 0.9rem; color: #94a3b8;">Document is unsigned (normal for standard PDFs).</p>'}
-        `;
-        tcContainer.appendChild(tc2Div);
-
-        // TC 3: Re-saved PDF Analysis
-        const tc3 = res.test_cases.resaved_pdf_analysis;
-        const tc3Div = document.createElement('div');
-        tc3Div.className = 'finding-card';
-        tc3Div.innerHTML = `
-          <div class="finding-header">
-            <span class="finding-title">3. Re-saved PDF Layout & Content Scan</span>
-            <span class="badge ${tc3.status === 'suspicious_indicators_found' ? 'badge-medium' : 'badge-info'}">${tc3.status.replace(/_/g, ' ')}</span>
-          </div>
-          <p style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 0.5rem;">
-            Anomalies detected: <strong>${tc3.findings.length}</strong> | Historical comparison available: <strong>${tc3.historical_comparison_available ? 'Yes' : 'No'}</strong>
-          </p>
-          ${tc3.findings.length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(tc3.findings, null, 2))}</pre>` : '<p style="font-size: 0.9rem; color: #94a3b8;">No layout or font anomalies detected.</p>'}
-        `;
-        tcContainer.appendChild(tc3Div);
-      } else {
-        tcCard.style.display = 'none';
+        banner.classList.add('status-inconclusive');
+        statusPill.className = 'status-pill pill-inconclusive';
+        statusPill.textContent = 'Inconclusive Analysis';
       }
 
-      // Dates
-      const cDate = res.metadata.dates?.creation_date || 'Not specified in metadata';
-      const mDate = res.metadata.dates?.modification_date || 'Not specified in metadata';
-      document.getElementById('creationDateVal').textContent = cDate;
-      document.getElementById('modDateVal').textContent = mDate;
+      const confVal = Math.round((assess.score !== undefined && assess.score !== null ? assess.score : (res.confidence || 0)) * 100);
+      scoreBadge.textContent = `Calibrated Confidence: ${confVal}%`;
+      document.getElementById('summaryOverall').textContent = assess.summary || res.summary?.overall || res.verdict;
 
-      // File Facts
+      // Module Status Badges
+      const analyses = res.analyses || {};
+      document.getElementById('badgeStructStatus').textContent = `Structural: ${(analyses.structural?.status || 'completed').toUpperCase()}`;
+      document.getElementById('badgeVisStatus').textContent = `Visual: ${(analyses.visual?.status || 'completed').toUpperCase()}`;
+      document.getElementById('badgeVerStatus').textContent = `Verification: ${(analyses.verification?.status || 'unavailable').toUpperCase()}`;
+
+      // Recommended Next Steps
+      const stepsList = document.getElementById('stepsList');
+      stepsList.innerHTML = '';
+      const steps = res.recommended_next_steps || [];
+      if (steps.length > 0) {
+        steps.forEach(s => {
+          const li = document.createElement('li');
+          li.textContent = s;
+          stepsList.appendChild(li);
+        });
+        document.getElementById('stepsCard').style.display = 'block';
+      } else {
+        document.getElementById('stepsCard').style.display = 'none';
+      }
+
+      // 2. Tab 1: Structural Analysis
+      document.getElementById('structuralSummary').textContent = analyses.structural?.summary || 'Structural analysis completed.';
+      renderFindingsGroup(document.getElementById('structuralFindingsList'), analyses.structural?.findings || []);
+
+      // 3. Tab 2: Visual Analysis & Viewer
+      document.getElementById('visualSummary').textContent = analyses.visual?.summary || 'Visual analysis completed.';
+      renderFindingsGroup(document.getElementById('visualFindingsList'), analyses.visual?.findings || []);
+
+      globalPreviws = analyses.visual?.page_previews || [];
+      const pageSelect = document.getElementById('pageSelect');
+      pageSelect.innerHTML = '';
+
+      if (globalPreviws.length > 0) {
+        document.getElementById('visualViewer').style.display = 'flex';
+        globalPreviws.forEach((p, idx) => {
+          const opt = document.createElement('option');
+          opt.value = idx;
+          opt.textContent = `Page ${p.page_number} (${p.suspicious_regions.length} region${p.suspicious_regions.length !== 1 ? 's' : ''})`;
+          pageSelect.appendChild(opt);
+        });
+        pageSelect.onchange = () => updateVisualPreview(parseInt(pageSelect.value));
+        updateVisualPreview(0);
+      } else {
+        document.getElementById('visualViewer').style.display = 'none';
+      }
+
+      // 4. Tab 3: Independent Verification
+      const verLayer = analyses.verification || {};
+      document.getElementById('verificationSummary').textContent = verLayer.summary || 'Independent verification unavailable.';
+
+      // Signatures
+      const sigResults = verLayer.signature_results || [];
+      const sigBadge = document.getElementById('sigStatusBadge');
+      const sigBox = document.getElementById('sigDetailsBox');
+      if (sigResults.length > 0) {
+        sigBadge.className = 'badge badge-high';
+        sigBadge.textContent = `${sigResults.length} Signature(s) Detected`;
+        sigBox.innerHTML = `<pre class="evidence-box">${escapeHtml(JSON.stringify(sigResults, null, 2))}</pre>`;
+      } else {
+        sigBadge.className = 'badge badge-low';
+        sigBadge.textContent = 'Unsigned Document';
+        sigBox.textContent = 'No digital signature fields detected. This is standard for ordinary, non-certified PDFs.';
+      }
+
+      // Original Comparison
+      const origComp = verLayer.original_comparison;
+      const origBadge = document.getElementById('origCompStatusBadge');
+      const origSummary = document.getElementById('origCompSummary');
+      const origDiffBox = document.getElementById('origDiffPreviewBox');
+
+      if (origComp && origComp.status === 'completed') {
+        origSummary.textContent = origComp.summary;
+        if (origComp.differences_detected) {
+          origBadge.className = 'badge badge-high';
+          origBadge.textContent = 'Differences Detected';
+          origDiffBox.style.display = 'grid';
+          origDiffBox.innerHTML = '';
+          (origComp.page_diffs || []).forEach(pd => {
+            if (pd.diff_image_base64) {
+              const div = document.createElement('div');
+              div.innerHTML = `
+                <p style="font-size: 0.85rem; font-weight: 600; color: #f87171; margin-bottom: 0.3rem;">Page ${pd.page_number}: ${pd.changed_pixel_count} altered pixel(s)</p>
+                <img class="diff-img-preview" src="${pd.diff_image_base64}" alt="Page ${pd.page_number} Diff Overlay">
+              `;
+              origDiffBox.appendChild(div);
+            }
+          });
+        } else {
+          origBadge.className = 'badge badge-low';
+          origBadge.textContent = 'Exact Content Match';
+          origDiffBox.style.display = 'none';
+        }
+      } else {
+        origBadge.className = 'badge badge-info';
+        origBadge.textContent = 'Unavailable';
+        origSummary.textContent = 'No trusted reference original PDF provided. Upload a reference file above to execute side-by-side verification.';
+        origDiffBox.style.display = 'none';
+      }
+
+      // Hash Check
+      const hashVer = verLayer.hash_verification;
+      const hashBadge = document.getElementById('hashStatusBadge');
+      const hashText = document.getElementById('hashSummaryText');
+      if (hashVer && hashVer.status === 'verified_match') {
+        hashBadge.className = 'badge badge-low';
+        hashBadge.textContent = 'Verified Match';
+        hashText.textContent = hashVer.description;
+      } else if (hashVer && hashVer.status === 'hash_mismatch') {
+        hashBadge.className = 'badge badge-high';
+        hashBadge.textContent = 'Hash Mismatch';
+        hashText.textContent = hashVer.description;
+      } else {
+        hashBadge.className = 'badge badge-info';
+        hashBadge.textContent = 'Reference Not Provided';
+        hashText.textContent = hashVer ? hashVer.description : `Computed SHA-256: ${res.file.sha256}`;
+      }
+
+      // 5. Tab 4: All Findings & Facts
+      document.getElementById('creationDateVal').textContent = res.metadata.dates?.creation_date || 'Not available';
+      document.getElementById('modDateVal').textContent = res.metadata.dates?.modification_date || 'Not available';
       document.getElementById('factName').textContent = res.file.name;
       document.getElementById('factSize').textContent = formatBytes(res.file.size_bytes);
       document.getElementById('factVersion').textContent = res.file.pdf_version;
       document.getElementById('factPages').textContent = res.file.page_count;
       document.getElementById('factSha256').textContent = res.file.sha256;
 
-      // Findings
-      const findingsList = document.getElementById('findingsList');
-      findingsList.innerHTML = '';
-
-      if (res.findings.length === 0) {
-        findingsList.innerHTML = '<p style="color: #94a3b8; font-size: 0.9rem;">No forensic flags or inconsistencies detected in metadata.</p>';
-      } else {
-        res.findings.forEach(f => {
-          const div = document.createElement('div');
-          div.className = 'finding-card';
-
-          const sevClass = `badge-${f.severity.toLowerCase()}`;
-          const catClass = `chip-${f.category.toLowerCase()}`;
-
-          const codeText = f.code || f.id || 'ANOMALY';
-          const titleText = f.title || f.code || 'Forensic Finding';
-          const descText = f.description || f.explanation || '';
-          const limitationsText = f.limitations && f.limitations.length > 0 ? f.limitations.join('; ') : '';
-
-          div.innerHTML = `
-            <div class="finding-header">
-              <span class="finding-title">${escapeHtml(titleText)} <span style="font-size: 0.75rem; color: #64748b; font-family: monospace;">[${escapeHtml(codeText)}]</span></span>
-              <div class="badges">
-                <span class="badge ${sevClass}">${f.severity}</span>
-                <span class="chip ${catClass}" style="padding: 0.2rem 0.5rem; font-size: 0.7rem;">${f.category}</span>
-              </div>
-            </div>
-            <div class="finding-desc">${escapeHtml(descText)}</div>
-            ${Object.keys(f.evidence || {}).length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(f.evidence, null, 2))}</pre>` : ''}
-            ${limitationsText ? `<p style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.5rem;"><em>Forensic Limitations:</em> ${escapeHtml(limitationsText)}</p>` : ''}
-          `;
-          findingsList.appendChild(div);
-        });
-      }
-
-      // Raw Metadata
+      renderFindingsGroup(document.getElementById('allFindingsList'), res.findings || []);
       document.getElementById('rawMetadataJson').textContent = JSON.stringify(res.metadata, null, 2);
+    }
+
+    function updateVisualPreview(idx) {
+      if (!globalPreviws[idx]) return;
+      const p = globalPreviws[idx];
+      const imgElem = document.getElementById('renderedPageImg');
+      imgElem.src = currentPreviewMode === 'original' ? p.original_image_base64 : p.overlay_image_base64;
+
+      const notesBox = document.getElementById('visualRegionNotes');
+      if (p.suspicious_regions.length > 0) {
+        notesBox.innerHTML = `<strong>Page ${p.page_number} Flagged Regions:</strong> ` + p.suspicious_regions.map(r => `${r.description} (${r.technique})`).join('; ');
+      } else {
+        notesBox.textContent = `Page ${p.page_number} has no visual sharpness or texture outliers detected.`;
+      }
+    }
+
+    document.getElementById('btnShowOriginal').addEventListener('click', () => {
+      currentPreviewMode = 'original';
+      document.getElementById('btnShowOriginal').classList.add('active');
+      document.getElementById('btnShowOverlay').classList.remove('active');
+      const pageSelect = document.getElementById('pageSelect');
+      updateVisualPreview(parseInt(pageSelect.value || 0));
+    });
+
+    document.getElementById('btnShowOverlay').addEventListener('click', () => {
+      currentPreviewMode = 'overlay';
+      document.getElementById('btnShowOverlay').classList.add('active');
+      document.getElementById('btnShowOriginal').classList.remove('active');
+      const pageSelect = document.getElementById('pageSelect');
+      updateVisualPreview(parseInt(pageSelect.value || 0));
+    });
+
+    function renderFindingsGroup(container, findings) {
+      container.innerHTML = '';
+      if (!findings || findings.length === 0) {
+        container.innerHTML = '<p style="color: #94a3b8; font-size: 0.9rem; padding: 0.5rem 0;">No suspicious anomalies identified in this section.</p>';
+        return;
+      }
+      findings.forEach(f => {
+        const div = document.createElement('div');
+        div.className = 'finding-card';
+        const sevClass = `badge-${(f.severity || 'low').toLowerCase()}`;
+        const title = f.title || f.code || 'Forensic Finding';
+        const desc = f.description || f.explanation || '';
+        const limitations = f.limitations && f.limitations.length > 0 ? f.limitations.join('; ') : '';
+
+        div.innerHTML = `
+          <div class="finding-header">
+            <span class="finding-title">${escapeHtml(title)} <span style="font-size: 0.75rem; color: #64748b; font-family: monospace;">[${escapeHtml(f.code || '')}]</span></span>
+            <span class="badge ${sevClass}">${escapeHtml(f.severity || 'info')}</span>
+          </div>
+          <div style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 0.5rem;">${escapeHtml(desc)}</div>
+          ${f.evidence && Object.keys(f.evidence).length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(f.evidence, null, 2))}</pre>` : ''}
+          ${limitations ? `<p style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;"><em>Forensic Limitations:</em> ${escapeHtml(limitations)}</p>` : ''}
+        `;
+        container.appendChild(div);
+      });
     }
 
     function escapeHtml(str) {
@@ -883,4 +1060,3 @@
   </script>
 </body>
 </html>
-

@@ -26,6 +26,7 @@ from app.services.pdf_analysis.pdf_loader import LoadedPdf, load_pdf
 from app.services.pdf_analysis.result_builder import build_unified_response
 from app.services.pdf_analysis.revision_forensics import analyze_revision_structure
 from app.services.pdf_analysis.signature_forensics import analyze_digital_signatures_forensics
+from app.services.pdf_analysis.structural_analysis import analyze_structural_layer
 from app.services.pdf_analysis.structural_forensics import analyze_structural_forensics
 from app.services.pdf_analysis.test_case_1_incremental_revisions import analyze_incremental_revisions
 from app.services.pdf_analysis.test_case_2_digital_signatures import analyze_digital_signatures
@@ -33,6 +34,8 @@ from app.services.pdf_analysis.test_case_3_resaved_pdf import (
     analyze_resaved_pdf,
     resaved_findings_to_forensic,
 )
+from app.services.pdf_analysis.verification_analysis import analyze_verification_layer
+from app.services.pdf_analysis.visual_analysis import analyze_visual_layer
 
 logger = logging.getLogger("pdf_analyser.orchestrator")
 
@@ -85,8 +88,11 @@ def run_pdf_analysis(
     source: bytes | Path,
     filename: str = "document.pdf",
     doc_type: str | None = None,
+    original_source: bytes | Path | None = None,
+    original_filename: str = "trusted_original.pdf",
+    expected_hash: str | None = None,
 ) -> UnifiedAnalysisResponse:
-    """Run full PDF forensic pipeline: metadata, revisions, signatures, content-streams, and layout.
+    """Run full three-layer PDF forensic pipeline: structural, visual, and independent verification.
 
     Each module runs with complete failure isolation.
     """
@@ -210,7 +216,59 @@ def run_pdf_analysis(
             limitations=[f"Unexpected error in layout analysis: {layout_err}"],
         )
 
-    # 7. Evaluate Evidence in Decision Engine
+    # 7. Layer 1: Structural Analysis (Deep text spans, whiteouts, images, annotations)
+    structural_layer = None
+    try:
+        structural_layer = analyze_structural_layer(loaded_pdf)
+        all_forensic_findings.extend(structural_layer.findings)
+        module_limitations.extend(structural_layer.limitations)
+    except Exception as struct_err:
+        logger.error("Structural layer analysis failed: %s", struct_err, exc_info=True)
+        module_limitations.append(f"Structural analysis error: {struct_err}")
+
+    # 8. Layer 2: Visual & Pixel-Level Analysis (DPI rendering, text-edges, whiteouts, copy-move)
+    visual_layer = None
+    try:
+        visual_layer = analyze_visual_layer(loaded_pdf)
+        all_forensic_findings.extend(visual_layer.findings)
+        module_limitations.extend(visual_layer.limitations)
+    except Exception as vis_err:
+        logger.error("Visual layer analysis failed: %s", vis_err, exc_info=True)
+        module_limitations.append(f"Visual analysis error: {vis_err}")
+
+    # 9. Layer 3: Independent Verification (Signatures, trusted original diff, hash check)
+    verification_layer = None
+    try:
+        orig_bytes = None
+        if original_source is not None:
+            if isinstance(original_source, Path):
+                orig_bytes = original_source.read_bytes()
+            else:
+                orig_bytes = original_source
+
+        verification_layer = analyze_verification_layer(
+            loaded_pdf=loaded_pdf,
+            original_bytes=orig_bytes,
+            original_filename=original_filename,
+            expected_hash=expected_hash,
+        )
+        all_forensic_findings.extend(verification_layer.findings)
+        module_limitations.extend(verification_layer.limitations)
+    except Exception as ver_err:
+        logger.error("Verification layer analysis failed: %s", ver_err, exc_info=True)
+        module_limitations.append(f"Independent verification error: {ver_err}")
+
+    # 10. Deduplicate exact duplicate findings
+    unique_findings: list[ForensicFinding] = []
+    seen_finding_keys = set()
+    for f in all_forensic_findings:
+        key = (f.code, f.description)
+        if key not in seen_finding_keys:
+            seen_finding_keys.add(key)
+            unique_findings.append(f)
+    all_forensic_findings = unique_findings
+
+    # 11. Evaluate Evidence in Decision Engine
     decision = evaluate_forensic_evidence(
         loaded_pdf=loaded_pdf,
         all_findings=all_forensic_findings,
@@ -218,7 +276,7 @@ def run_pdf_analysis(
         module_limitations=module_limitations,
     )
 
-    # 8. Build Unified Response
+    # 12. Build Unified Response
     return build_unified_response(
         loaded_pdf=loaded_pdf,
         metadata_container=metadata_container,
@@ -229,4 +287,7 @@ def run_pdf_analysis(
         decision=decision,
         all_forensic_findings=all_forensic_findings,
         checks=checks,
+        structural_layer=structural_layer,
+        visual_layer=visual_layer,
+        verification_layer=verification_layer,
     )

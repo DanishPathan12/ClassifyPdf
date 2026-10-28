@@ -1,63 +1,118 @@
-# PDF Forensic Manipulation Detection System
+# PDF Forensic Tampering & Manipulation Detection System
 
-An evidence-based PDF forensic analysis service with an interactive web dashboard and REST API that analyzes **a single PDF independently** to answer one primary question:
+An evidence-based PDF forensic analysis service with an interactive web dashboard and REST API designed to detect potential PDF tampering across **three complementary analysis layers**:
 
-> **“Does this PDF contain credible evidence that it has been edited or manipulated?”**
+1. **Layer 1: PDF Structural Analysis**
+   - Text spans, fonts, sizes, colors, bounding boxes, and positioning.
+   - Opaque / white vector rectangles covering text or images (a telltale signature of online PDF editors like Sejda and SmallPDF used to redact/whiteout figures).
+   - Abrupt font switches within otherwise homogeneous text blocks.
+   - Text-to-text overlaps and sparse digital text overlaid on embedded bitmap images.
+   - Embedded image dimensions and bounding box locations.
+   - Annotations and form field widget visibility audits.
+   - Incremental cross-reference tables/streams, `/Prev` pointer chains, linearization, and critical object replacement.
 
-The system does NOT require an original or reference PDF. It does not attempt to reconstruct hypothetical altered words; instead, it focuses on verifiable forensic signals across:
-1. **Document Validation & Integrity** (SHA-256, magic bytes, parsing limits, encryption detection)
-2. **Structural Revision History** (XRef tables/streams, `/Prev` pointer chains, linearization, critical structure replacement)
-3. **Digital Signature Forensics** (`/ByteRange` coverage, cryptographic digest validity, DocMDP permissions, post-signature modification)
-4. **Content-Stream & Object Forensics** (Unreferenced orphan streams, dangling font references, invisible text `3 Tr`, graphics state stacking)
-5. **Metadata Forensic Checks** (Chronological inversions, Info vs. XMP synchronization, editing software signatures, future dates)
-6. **Layout & Typographic Anomalies** (Supporting signals: overlapping text, text over raster scans, font anomalies)
+2. **Layer 2: Pixel-Level and Visual Analysis**
+   - Configurable DPI page rendering via PyMuPDF (default 150 DPI) with exact bidirectional coordinate mapping.
+   - **Text-Edge Sharpness & Antialiasing Consistency**: Local Laplacian variance and Sobel gradient magnitude evaluation to detect pasted or re-rendered text.
+   - **Background & Texture Uniformity**: Detection of flat rectangular texture drop patches adjacent to natural page texture.
+   - **Copy-Move / Duplicate Region Detection**: Block-based feature matching across page imagery to flag candidate duplicated elements with safeguards against tables, ruling lines, and repetitive headers.
+   - **Error Level Analysis (ELA)**: Re-compression discrepancy mapping as an auxiliary experimental signal.
+   - **Visual Overlay & Heatmap Generation**: Highlighting suspicious regions on rendered page previews with interactive toggle between original and flagged overlay.
 
----
-
-## Forensic Philosophy & Verdict System
-
-Findings represent objective forensic evidence evaluated by an **Evidence-Based Decision Engine**:
-- **Independent Evidence Evaluation**: Correlated indicators are not counted redundantly.
-- **Strict Anti-False-Positive Rules**:
-  - Weak layout anomalies alone NEVER trigger a manipulation verdict.
-  - Metadata anomalies alone NEVER trigger a manipulation verdict.
-  - Incremental revisions alone NEVER trigger a manipulation verdict (editors frequently save incrementally).
-  - Malformed or password-protected documents are classified as `inconclusive`, not manipulated.
-  - Unsigned documents are classified as normal, not manipulated.
-
-### Standardized Verdicts
-
-| Verdict | Meaning | `edit_detected` | Confidence Range |
-| :--- | :--- | :---: | :---: |
-| `likely_edited` | Credible evidence supports subsequent modification or manipulation (e.g. post-signature modifications, cryptographically broken signatures, critical structure replacement, or multi-domain moderate anomalies). | `true` | `0.75` – `0.95` |
-| `suspicious_indicators` | Anomalies exist, but the evidence is insufficient on its own to conclude that the PDF was edited (e.g. isolated layout overlap, single metadata date mismatch). | `null` | `0.15` – `0.65` |
-| `no_edit_evidence_found` | Analysis completed and found no meaningful evidence of editing. *This does not prove the document is an untouched original.* | `false` | `0.00` |
-| `inconclusive` | Analysis could not produce a reliable conclusion (e.g. password-encrypted, corrupted, or unsupported PDF). | `null` | `0.00` |
+3. **Layer 3: Independent Verification**
+   - **Digital Signature Cryptography**: pyHanko validation, ByteRange EOF coverage, cryptographic digest verification, and DocMDP permission checks.
+   - **Trusted-Original Comparison**: When an optional reference original PDF is provided, computes page count diffs, extracted text diffs, and visual pixel diffs (`cv2.absdiff`) with bounding boxes around added/altered elements.
+   - **Reference Hash Integrity**: SHA-256 verification against an optional expected reference hash.
 
 ---
 
-## API Response Schema
+## Forensic Philosophy & Assessment Statuses
 
-The `/analyze` (and `/api/v1/analyze`) endpoint returns:
+The system produces structured findings that are synthesized into four standardized forensic statuses:
+
+| Status | Meaning | Calibrated Score |
+| :--- | :--- | :---: |
+| `confirmed_integrity_failure` | A specific integrity check has failed (e.g. invalid cryptographic signature digest, unauthorized post-signature alteration, or confirmed diff against trusted original). | `0.85` – `0.95` |
+| `suspicious_indicators_detected` | One or more structural or visual anomalies warrant review (e.g. whiteout patches, unreferenced orphan objects, dangling fonts, text over image, copy-move duplicate candidates, or inverted timestamps). | `0.15` – `0.65` |
+| `no_suspicious_indicators_detected` | Implemented checks did not identify significant anomalies. *This does not prove the document is an untouched original.* | `0.00` |
+| `inconclusive` | Analysis could not produce a reliable conclusion (e.g. password-encrypted, corrupted, or unsupported PDF). | `0.00` |
+
+---
+
+## API Usage
+
+### Single PDF Upload (Standard)
+
+```bash
+curl -X POST "http://localhost:8000/analyze" \
+  -F "file=@document.pdf" \
+  -F "doc_type=official"
+```
+
+### With Independent Verification (Trusted Original & Expected Hash)
+
+```bash
+curl -X POST "http://localhost:8000/analyze" \
+  -F "file=@altered_contract.pdf" \
+  -F "original_file=@original_contract.pdf" \
+  -F "expected_hash=5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"
+```
+
+### Response Schema
 
 ```json
 {
   "file_name": "contract.pdf",
   "file_hash_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "verdict": "likely_edited",
-  "edit_detected": true,
-  "confidence": 0.90,
-  "summary": "Credible forensic evidence indicates subsequent modification: Document was modified after digital signature 'Sig1' was applied; appended revision exists outside signed byte range. These findings are not proof of tampering.",
-  "analysis_status": "completed",
-  "checks": {
-    "metadata": "completed",
-    "revision_history": "completed",
-    "digital_signatures": "completed",
-    "content_streams": "completed",
-    "layout_analysis": "completed"
+  "overall_assessment": {
+    "status": "suspicious_indicators_detected",
+    "summary": "Suspicious indicators were detected (whiteout rectangle overlay), but evidence is insufficient to conclude manipulation without an original.",
+    "score": 0.65,
+    "score_explanation": "Score 0.65: Isolated moderate anomaly (STRUCT_WHITEOUT_RECTANGLE_OVERLAY) warrants visual review."
   },
-  "findings": [
-    {
+  "analyses": {
+    "structural": {
+      "status": "completed",
+      "summary": "Structural analysis identified 1 suspicious structural anomaly.",
+      "findings": [...],
+      "limitations": [...]
+    },
+    "visual": {
+      "status": "completed",
+      "summary": "Visual analysis identified 1 candidate region across 1 page.",
+      "page_previews": [
+        {
+          "page_number": 1,
+          "width_px": 1275,
+          "height_px": 1650,
+          "dpi": 150,
+          "original_image_base64": "data:image/png;base64,...",
+          "overlay_image_base64": "data:image/png;base64,...",
+          "suspicious_regions": [...]
+        }
+      ],
+      "limitations": [...]
+    },
+    "verification": {
+      "status": "unavailable",
+      "summary": "Independent verification methods were not present or available for this document.",
+      "signature_results": [],
+      "original_comparison": null,
+      "hash_verification": {
+        "status": "reference_not_provided",
+        "computed_hash": "e3b0c442...",
+        "matches": null
+      },
+      "limitations": [...]
+    }
+  },
+  "key_findings": [...],
+  "recommended_next_steps": [
+    "Review highlighted visual overlay previews to inspect flagged text or background regions.",
+    "If available, provide trusted original PDF for automated pixel and text diff verification."
+  ]
+}
+```
       "code": "SIG_POST_SIGNING_MODIFICATION",
       "category": "confirmed",
       "domain": "digital_signatures",

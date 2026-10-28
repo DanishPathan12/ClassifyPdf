@@ -34,9 +34,19 @@ def analyze_pdf_file(
     file_size: int,
     sha256_hash: str,
     doc_type: str | None = None,
+    original_source: bytes | Path | None = None,
+    original_filename: str = "trusted_original.pdf",
+    expected_hash: str | None = None,
 ) -> UnifiedAnalysisResponse:
-    """Analyze PDF file through the multi-test-case forensic orchestrator."""
-    return run_pdf_analysis(file_path, filename=file_name, doc_type=doc_type)
+    """Analyze PDF file through the three-layer forensic orchestrator."""
+    return run_pdf_analysis(
+        file_path,
+        filename=file_name,
+        doc_type=doc_type,
+        original_source=original_source,
+        original_filename=original_filename,
+        expected_hash=expected_hash,
+    )
 
 app = FastAPI(
     title="PDF Forensic Metadata Analysis Service",
@@ -79,14 +89,11 @@ async def health_check() -> HealthResponse:
 @app.post("/analyze", response_model=UnifiedAnalysisResponse)
 async def analyze_pdf(
     file: UploadFile | None = File(default=None, description="PDF or Image file to analyze"),
+    original_file: UploadFile | None = File(default=None, description="Optional trusted reference original PDF"),
+    expected_hash: str | None = Form(default=None, description="Optional expected SHA-256 reference hash"),
     doc_type: str | None = Form(default=None, description="Optional document type: 'official' (bank receipt, invoice, ID) or 'standard' (resume, report)"),
-) -> AnalysisResponse:
-    """Analyze an uploaded PDF or image for forensic metadata inconsistencies.
-
-    Accepts multipart/form-data with field name 'file' and optional 'doc_type'.
-    Validates file headers, size limits, and encryption status.
-    Executes CPU-bound analysis off the event loop with timeout protection.
-    """
+) -> UnifiedAnalysisResponse:
+    """Analyze an uploaded PDF or image across structural, visual, and independent verification layers."""
     temp_path: Path | None = None
 
     try:
@@ -94,28 +101,49 @@ async def analyze_pdf(
         temp_path, file_size, sha256_hash, file_type = await validate_and_save_upload(file)
         safe_filename = Path(file.filename or "upload.pdf").name
 
+        orig_bytes: bytes | None = None
+        orig_name: str = "trusted_original.pdf"
+        if original_file and original_file.filename:
+            orig_bytes = await original_file.read()
+            orig_name = Path(original_file.filename).name
+
         logger.info(
-            "Processing %s upload: filename=%s, size_bytes=%d, doc_type=%s",
+            "Processing %s upload: filename=%s, size_bytes=%d, doc_type=%s, has_original=%s",
             file_type.upper(),
             safe_filename,
             file_size,
             doc_type,
+            bool(orig_bytes),
         )
 
-        # Run CPU-bound analysis in a threadpool with timeout protection
-        analysis_fn = analyze_image_file if file_type == "image" else analyze_pdf_file
         try:
-            analysis_result = await asyncio.wait_for(
-                run_in_threadpool(
-                    analysis_fn,
-                    temp_path,
-                    safe_filename,
-                    file_size,
-                    sha256_hash,
-                    doc_type,
-                ),
-                timeout=ANALYSIS_TIMEOUT_SECONDS,
-            )
+            if file_type == "image":
+                analysis_result = await asyncio.wait_for(
+                    run_in_threadpool(
+                        analyze_image_file,
+                        temp_path,
+                        safe_filename,
+                        file_size,
+                        sha256_hash,
+                        doc_type,
+                    ),
+                    timeout=ANALYSIS_TIMEOUT_SECONDS,
+                )
+            else:
+                analysis_result = await asyncio.wait_for(
+                    run_in_threadpool(
+                        analyze_pdf_file,
+                        temp_path,
+                        safe_filename,
+                        file_size,
+                        sha256_hash,
+                        doc_type,
+                        orig_bytes,
+                        orig_name,
+                        expected_hash,
+                    ),
+                    timeout=ANALYSIS_TIMEOUT_SECONDS,
+                )
         except asyncio.TimeoutError:
             logger.warning("PDF analysis timed out after %.1fs", ANALYSIS_TIMEOUT_SECONDS)
             raise HTTPException(

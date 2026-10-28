@@ -250,7 +250,8 @@ def parse_date(val: Any) -> ParsedDateResult:
         r"(?:(\d{2})"                           # mm (optional)
         r"(?:(\d{2}))?"                         # SS (optional)
         r")?)?)?)?"
-        r"(?:(Z)|([+-])(\d{1,2})(?:\'?(\d{2})\'?)?)?$"  # Timezone offset
+        r"(?:(Z)(?:[+-]?(\d{1,2})(?:\'?(\d{2})\'?)?)?|([+-])(\d{1,2})(?:\'?(\d{2})\'?)?)?"  # Timezone (Z, Z00'00', +05'30', etc.)
+        r"\'?$"  # Optional trailing apostrophe
     )
     m = pattern.match(s_pdf)
     if not m:
@@ -267,9 +268,11 @@ def parse_date(val: Any) -> ParsedDateResult:
     second = int(m.group(6)) if m.group(6) else 0
 
     tz_z = m.group(7)
-    tz_sign = m.group(8)
-    tz_h = m.group(9)
-    tz_m = m.group(10)
+    tz_z_h = m.group(8)
+    tz_z_m = m.group(9)
+    tz_sign = m.group(10)
+    tz_h = m.group(11)
+    tz_m = m.group(12)
 
     offset_min: float | None = None
     tz: timezone | None = None
@@ -277,6 +280,13 @@ def parse_date(val: Any) -> ParsedDateResult:
     if tz_z:
         offset_min = 0.0
         tz = timezone.utc
+        if tz_z_h:
+            h = int(tz_z_h)
+            mins = int(tz_z_m) if tz_z_m else 0
+            if h != 0 or mins != 0:
+                total_m = h * 60 + mins
+                offset_min = float(total_m)
+                tz = timezone(timedelta(minutes=total_m))
     elif tz_sign and tz_h:
         h = int(tz_h)
         mins = int(tz_m) if tz_m else 0

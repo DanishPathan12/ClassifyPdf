@@ -16,6 +16,8 @@ STRONG_INDICATOR_CODES = frozenset({
     "SIG_POST_SIGNING_MODIFICATION",
     "SIG_CRYPTO_DIGEST_INVALID",
     "REV_CRITICAL_OBJECT_REPLACED",
+    "VERIFY_ORIGINAL_DIFF_DETECTED",
+    "VERIFY_REFERENCE_HASH_MISMATCH",
 })
 
 # Moderate indicators that require independent correlation
@@ -24,6 +26,11 @@ MODERATE_INDICATOR_CODES = frozenset({
     "STREAM_UNREFERENCED_ORPHAN_OBJECTS",
     "STREAM_DANGLING_FONT_REFERENCE",
     "REV_XREF_OFFSET_OUT_OF_BOUNDS",
+    "STRUCT_WHITEOUT_RECTANGLE_OVERLAY",
+    "STRUCT_WHITE_TEXT_LAYER_OVERLAY",
+    "VISUAL_WHITEOUT_PATCH_DETECTED",
+    "VISUAL_WHITE_TEXT_LAYER_OVERLAY",
+    "VISUAL_DUPLICATE_REGION_CANDIDATE",
 })
 
 # Weak / supporting indicators that cannot establish manipulation on their own
@@ -32,6 +39,14 @@ WEAK_INDICATOR_CODES = frozenset({
     "LAYOUT_TEXT_OVER_IMAGE",
     "LAYOUT_INCONSISTENT_FONT",
     "LAYOUT_ISOLATED_OVERLAY",
+    "STRUCT_TEXT_OVERLAP",
+    "STRUCT_TEXT_OVER_IMAGE",
+    "STRUCT_INCONSISTENT_FONT_SWITCH",
+    "STRUCT_INVISIBLE_WHITE_TEXT",
+    "VISUAL_HIDDEN_WHITE_TEXT",
+    "VISUAL_TEXT_COLLISION_OVERLAY",
+    "VISUAL_INCONSISTENT_TEXT_SHARPNESS",
+    "VISUAL_ELA_HIGH_COMPRESSION_VARIANCE",
     "STREAM_INVISIBLE_TEXT_OPERATOR",
     "STREAM_MULTIPLE_PAGE_CONTENTS",
     "STREAM_UNBALANCED_GRAPHICS_STATE",
@@ -55,6 +70,10 @@ class DecisionOutcome:
     checks: dict[str, str]
     limitations: list[str]
     all_findings: list[ForensicFinding] = field(default_factory=list)
+    assessment_status: str = "no_suspicious_indicators_detected"
+    score_explanation: str = ""
+    recommended_next_steps: list[str] = field(default_factory=list)
+
 
 
 def evaluate_forensic_evidence(
@@ -96,6 +115,11 @@ def evaluate_forensic_evidence(
                 checks=checks,
                 limitations=limitations,
                 all_findings=all_findings,
+                assessment_status="inconclusive",
+                score_explanation="Score 0.0: Encrypted/password-protected PDF cannot be evaluated.",
+                recommended_next_steps=[
+                    "Provide an unencrypted or non-password-protected copy of the PDF for analysis.",
+                ],
             )
         return DecisionOutcome(
             verdict=ForensicVerdict.INCONCLUSIVE.value,
@@ -106,6 +130,11 @@ def evaluate_forensic_evidence(
             checks=checks,
             limitations=limitations,
             all_findings=all_findings,
+            assessment_status="inconclusive",
+            score_explanation="Score 0.0: Corrupted or unparseable document structure.",
+            recommended_next_steps=[
+                "Re-export or re-scan the document using a standard compliant PDF writer.",
+            ],
         )
 
     # 2. Filter findings into strength tiers and categorize by domain
@@ -144,6 +173,13 @@ def evaluate_forensic_evidence(
             checks=checks,
             limitations=limitations,
             all_findings=all_findings,
+            assessment_status="confirmed_integrity_failure",
+            score_explanation=f"Score {conf}: Strong verifiable finding ({top_strong.code}) establishes that document integrity was breached.",
+            recommended_next_steps=[
+                "Inspect specific signed byte ranges or modified pages highlighted in the verification report.",
+                "Request a freshly issued and digitally signed copy from the authorized originator.",
+                "Compare against an authenticated archival record before relying on document contents.",
+            ],
         )
 
     # Rule B: Multiple independent moderate indicators from distinct domains
@@ -166,6 +202,13 @@ def evaluate_forensic_evidence(
             checks=checks,
             limitations=limitations,
             all_findings=all_findings,
+            assessment_status="suspicious_indicators_detected",
+            score_explanation=f"Score {conf}: Independent anomalies across {len(moderate_domains)} distinct forensic domains ({', '.join(sorted(moderate_domains))}) corroborate modification.",
+            recommended_next_steps=[
+                "Review flagged structural overlay patches and cross-reference revision anomalies.",
+                "If available, provide the trusted original PDF for automated pixel and text diff verification.",
+                "Independently confirm terms or figures appearing in flagged regions with the issuing party.",
+            ],
         )
 
     # Rule C: Suspicious indicators (moderate indicator in 1 domain, or multiple weak indicators)
@@ -179,6 +222,7 @@ def evaluate_forensic_evidence(
                 f"but the evidence is insufficient to conclude that the PDF was manipulated; "
                 "these indicators are not proof of tampering."
             )
+            score_expl = f"Score {round(conf, 2)}: Isolated moderate anomaly ({top_mod.code}) warrants visual review but lacks cross-domain corroboration."
         else:
             # Only weak / layout / minor metadata findings
             # Cap confidence at 0.35 max when only layout or weak signals exist
@@ -188,6 +232,7 @@ def evaluate_forensic_evidence(
                 f"Minor structural or layout anomalies were identified ({len(weak_findings)} indicator(s)), "
                 "these indicators are not proof of tampering."
             )
+            score_expl = f"Score {conf}: Low-confidence visual/layout anomalies. Normal layout complexity cannot be treated as manipulation."
 
         return DecisionOutcome(
             verdict=ForensicVerdict.SUSPICIOUS_INDICATORS.value,
@@ -198,6 +243,13 @@ def evaluate_forensic_evidence(
             checks=checks,
             limitations=limitations,
             all_findings=all_findings,
+            assessment_status="suspicious_indicators_detected",
+            score_explanation=score_expl,
+            recommended_next_steps=[
+                "Review the highlighted visual overlay previews to inspect flagged text or background regions.",
+                "Check whether whiteout rectangles or font switches align with known redaction or document design choices.",
+                "Perform reference hash verification or supply an original copy if certainty is required.",
+            ],
         )
 
     # Rule D: No edit evidence found
@@ -215,4 +267,11 @@ def evaluate_forensic_evidence(
         checks=checks,
         limitations=limitations,
         all_findings=all_findings,
+        assessment_status="no_suspicious_indicators_detected",
+        score_explanation="Score 0.0: No structural, visual, cryptographic, or metadata anomalies identified.",
+        recommended_next_steps=[
+            "Document shows no internal anomalies or traces of manipulation across all three analysis layers.",
+            "If absolute authenticity is required, verify external certificate chains or compare against a registered registry hash.",
+        ],
     )
+
