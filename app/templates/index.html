@@ -532,6 +532,143 @@
       max-height: 350px;
       border-radius: 6px;
     }
+
+    /* Executive Non-Technical Summary Styles */
+    .summary-hero-card {
+      background: linear-gradient(180deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+    }
+
+    .verdict-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.75rem;
+    }
+
+    .verdict-large-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.45rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .badge-verdict-green { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1.5px solid var(--success); }
+    .badge-verdict-amber { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1.5px solid var(--warning); }
+    .badge-verdict-red { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1.5px solid var(--danger); }
+    .badge-verdict-gray { background: rgba(100, 116, 139, 0.2); color: #cbd5e1; border: 1.5px solid var(--info); }
+
+    .verdict-headline {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-bottom: 0.5rem;
+    }
+
+    .verdict-explanation {
+      font-size: 0.95rem;
+      color: #cbd5e1;
+      line-height: 1.55;
+      margin-bottom: 1.25rem;
+    }
+
+    .trust-callout {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      background: rgba(15, 23, 42, 0.6);
+      border-left: 4px solid var(--accent-primary);
+      border-radius: 6px;
+      padding: 0.85rem 1.1rem;
+      margin-top: 1rem;
+      border: 1px solid var(--border-color);
+      border-left-width: 4px;
+    }
+
+    .trust-callout-red { border-left-color: var(--danger); }
+    .trust-callout-amber { border-left-color: var(--warning); }
+    .trust-callout-green { border-left-color: var(--success); }
+    .trust-callout-gray { border-left-color: var(--info); }
+
+    .checklist-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .checklist-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .check-card {
+      background: var(--card-bg-subtle);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .check-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .check-card-title {
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: #f1f5f9;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .quick-jump-banner {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      border-radius: 8px;
+      padding: 0.85rem 1.25rem;
+      margin-bottom: 1.25rem;
+      color: #fca5a5;
+    }
+
+    .btn-quick-view {
+      background: var(--danger);
+      color: white;
+      border: none;
+      padding: 0.45rem 0.95rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: opacity 0.2s;
+    }
+    .btn-quick-view:hover { opacity: 0.9; }
   </style>
 </head>
 <body>
@@ -615,14 +752,71 @@
 
       <!-- Analysis Navigation Tabs -->
       <div class="tabs-nav">
-        <button class="tab-btn active" data-tab="tab-structural">🧱 1. Structural Analysis</button>
-        <button class="tab-btn" data-tab="tab-visual">👁️ 2. Visual & Pixel Analysis</button>
-        <button class="tab-btn" data-tab="tab-verification">🛡️ 3. Independent Verification</button>
+        <button class="tab-btn active" data-tab="tab-summary">📋 Document Summary</button>
+        <button class="tab-btn" data-tab="tab-structural">🧱 Structural Analysis</button>
+        <button class="tab-btn" data-tab="tab-visual">👁️ Visual & Pixel Analysis</button>
+        <button class="tab-btn" data-tab="tab-verification">🛡️ Independent Verification</button>
         <button class="tab-btn" data-tab="tab-findings">🔍 All Forensic Findings</button>
       </div>
 
+      <!-- Tab 0: Document Summary (Default!) -->
+      <div class="tab-pane active" id="tab-summary">
+        <!-- Hero Verdict Card -->
+        <div class="summary-hero-card">
+          <div class="verdict-header">
+            <span class="verdict-large-badge badge-verdict-green" id="nonTechStatusPill">
+              <span id="nonTechStatusIcon">🟢</span>
+              <span id="nonTechStatusText">Proper & Likely Authentic</span>
+            </span>
+          </div>
+
+          <div class="verdict-headline" id="nonTechHeadline">No signs of editing or tampering detected.</div>
+          <div class="verdict-explanation" id="nonTechExplanation">All text, numbers, and layout elements appear naturally created with no hidden masking layers or whiteout covers.</div>
+
+          <div class="trust-callout trust-callout-green" id="nonTechTrustCallout">
+            <span style="font-size: 1.25rem;">🛡️</span>
+            <div>
+              <strong style="color: #f8fafc; font-size: 0.9rem;">Decision & Recommendation:</strong>
+              <p id="nonTechTrustText" style="color: #cbd5e1; font-size: 0.85rem; margin-top: 0.2rem; margin-bottom: 0;">This document appears authentic and proper for standard review.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Jump Alert for Visual Overlays -->
+        <div class="quick-jump-banner" id="nonTechQuickAlert">
+          <div>
+            <strong>⚠️ Highlighted Regions on Document:</strong>
+            <span id="nonTechAlertText">1 area has a white text masking layer detected.</span>
+          </div>
+          <button class="btn-quick-view" id="btnJumpToVisual">👁️ View Highlighted Page</button>
+        </div>
+
+        <!-- 4-Point Authenticity Checklist -->
+        <h4 style="color: #94a3b8; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem;">
+          Conclusive Authenticity Checklist
+        </h4>
+        <div class="checklist-grid" id="nonTechChecklistGrid"></div>
+
+        <!-- Quick Document Properties -->
+        <div class="card" style="margin-bottom: 0;">
+          <h4 style="color: #94a3b8; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem;">
+            Document Overview
+          </h4>
+          <div class="grid-2col" style="margin-bottom: 0;">
+            <div>
+              <div class="fact-item"><span class="fact-name">Document Name</span><span class="fact-val" id="summaryDocName">-</span></div>
+              <div class="fact-item"><span class="fact-name">File Size</span><span class="fact-val" id="summaryDocSize">-</span></div>
+            </div>
+            <div>
+              <div class="fact-item"><span class="fact-name">Total Pages</span><span class="fact-val" id="summaryDocPages">-</span></div>
+              <div class="fact-item"><span class="fact-name">Created Date</span><span class="fact-val" id="summaryDocCreated">-</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Tab 1: Structural Analysis -->
-      <div class="tab-pane active" id="tab-structural">
+      <div class="tab-pane" id="tab-structural">
         <div class="card">
           <h3>🧱 Layer 1: PDF Internal Structure & Object Audit</h3>
           <p id="structuralSummary" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">-</p>
@@ -829,6 +1023,14 @@
       resultsSection.style.display = 'block';
       resultsSection.scrollIntoView({ behavior: 'smooth' });
 
+      // Default to Summary Tab on new analysis
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      const summaryTabBtn = document.querySelector('[data-tab="tab-summary"]');
+      if (summaryTabBtn) summaryTabBtn.classList.add('active');
+      const summaryPane = document.getElementById('tab-summary');
+      if (summaryPane) summaryPane.classList.add('active');
+
       // 1. Overall Assessment Banner
       const assess = res.overall_assessment || {};
       const statusPill = document.getElementById('statusPill');
@@ -880,6 +1082,103 @@
       } else {
         document.getElementById('stepsCard').style.display = 'none';
       }
+
+      // Populate Executive Non-Technical Summary Tab (Default)
+      const nonTech = res.non_technical_summary || {};
+      const vColor = nonTech.verdict_color || 'green';
+      const statusPillElem = document.getElementById('nonTechStatusPill');
+      const statusIconElem = document.getElementById('nonTechStatusIcon');
+      const statusTextElem = document.getElementById('nonTechStatusText');
+      const headlineElem = document.getElementById('nonTechHeadline');
+      const explanationElem = document.getElementById('nonTechExplanation');
+      const trustBoxElem = document.getElementById('nonTechTrustCallout');
+      const trustTextElem = document.getElementById('nonTechTrustText');
+
+      if (statusPillElem) {
+        statusPillElem.className = `verdict-large-badge badge-verdict-${vColor}`;
+        const iconMap = { green: '🟢', red: '🔴', amber: '🟡', gray: '⚪' };
+        statusIconElem.textContent = iconMap[vColor] || '🟢';
+        statusTextElem.textContent = nonTech.verdict_label || 'Authentic & Clean';
+      }
+      if (headlineElem) headlineElem.textContent = nonTech.headline || 'Document analysis completed.';
+      if (explanationElem) explanationElem.textContent = nonTech.explanation || 'No structural tampering or visual masking detected.';
+      if (trustBoxElem) trustBoxElem.className = `trust-callout trust-callout-${vColor}`;
+      if (trustTextElem) trustTextElem.textContent = nonTech.trust_recommendation || 'This document appears proper for standard review.';
+
+      // Populate 4-Point Checklist
+      const checklistContainer = document.getElementById('nonTechChecklistGrid');
+      if (checklistContainer) {
+        checklistContainer.innerHTML = '';
+        const checkItems = nonTech.checks || [];
+        const iconCheckMap = {
+          'Content & Text Cover-Ups': '📝',
+          'Visual Appearance': '👁️',
+          'Document History & Dates': '🕒',
+          'Digital Seal & Signatures': '🔒',
+        };
+        const badgeClassMap = {
+          clean: 'badge-low',
+          warning: 'badge-high',
+          suspicious: 'badge-medium',
+          info: 'badge-info',
+        };
+        checkItems.forEach(item => {
+          const div = document.createElement('div');
+          div.className = 'check-card';
+          const icon = iconCheckMap[item.name] || '📌';
+          const bClass = badgeClassMap[item.status] || 'badge-info';
+          div.innerHTML = `
+            <div class="check-card-header">
+              <span class="check-card-title">${icon} ${escapeHtml(item.name)}</span>
+              <span class="badge ${bClass}">${escapeHtml((item.status || 'info').toUpperCase())}</span>
+            </div>
+            <div style="font-weight: 600; font-size: 0.85rem; color: #e2e8f0; margin-bottom: 0.2rem;">${escapeHtml(item.headline)}</div>
+            <div style="font-size: 0.8rem; color: #94a3b8; line-height: 1.4;">${escapeHtml(item.detail)}</div>
+          `;
+          checklistContainer.appendChild(div);
+        });
+      }
+
+      // Quick Alert for Visual Flagged Regions
+      const quickAlert = document.getElementById('nonTechQuickAlert');
+      const alertText = document.getElementById('nonTechAlertText');
+      const btnJump = document.getElementById('btnJumpToVisual');
+      let totalVisualRegions = 0;
+      if (analyses.visual?.page_previews) {
+        totalVisualRegions = analyses.visual.page_previews.reduce((acc, p) => acc + (p.suspicious_regions ? p.suspicious_regions.length : 0), 0);
+      }
+      if (quickAlert) {
+        if (totalVisualRegions > 0 || vColor === 'red') {
+          quickAlert.style.display = 'flex';
+          alertText.textContent = `${totalVisualRegions} highlighted suspicious region(s) detected (e.g. text masking or whiteout).`;
+          btnJump.onclick = () => {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+            const visBtn = document.querySelector('[data-tab="tab-visual"]');
+            if (visBtn) visBtn.classList.add('active');
+            const visPane = document.getElementById('tab-visual');
+            if (visPane) visPane.classList.add('active');
+            currentPreviewMode = 'overlay';
+            document.getElementById('btnShowOverlay').classList.add('active');
+            document.getElementById('btnShowOriginal').classList.remove('active');
+            const pageSelect = document.getElementById('pageSelect');
+            updateVisualPreview(parseInt(pageSelect.value || 0));
+            document.getElementById('visualViewer').scrollIntoView({ behavior: 'smooth' });
+          };
+        } else {
+          quickAlert.style.display = 'none';
+        }
+      }
+
+      // Document Overview Facts
+      const summaryDocName = document.getElementById('summaryDocName');
+      const summaryDocSize = document.getElementById('summaryDocSize');
+      const summaryDocPages = document.getElementById('summaryDocPages');
+      const summaryDocCreated = document.getElementById('summaryDocCreated');
+      if (summaryDocName) summaryDocName.textContent = res.file?.name || res.file_name || '-';
+      if (summaryDocSize) summaryDocSize.textContent = formatBytes(res.file?.size_bytes || 0);
+      if (summaryDocPages) summaryDocPages.textContent = res.file?.page_count || 1;
+      if (summaryDocCreated) summaryDocCreated.textContent = res.metadata?.dates?.creation_date || 'Standard / Unspecified';
 
       // 2. Tab 1: Structural Analysis
       document.getElementById('structuralSummary').textContent = analyses.structural?.summary || 'Structural analysis completed.';

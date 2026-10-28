@@ -353,6 +353,45 @@ def test_three_layer_api_single_pdf_upload() -> None:
     assert isinstance(data["recommended_next_steps"], list)
     assert len(data["recommended_next_steps"]) >= 1
 
+    # Check non-technical summary
+    assert "non_technical_summary" in data
+    nts = data["non_technical_summary"]
+    assert nts is not None
+    assert "is_proper" in nts
+    assert "verdict_label" in nts
+    assert "trust_recommendation" in nts
+    assert len(nts["checks"]) == 4
+
+
+def test_non_technical_summary_evaluates_proper_vs_altered() -> None:
+    """Non-technical summary provides conclusive, plain-English guidance for both clean and altered documents."""
+    # 1. Altered document with white text overlay
+    alt_bytes = _make_pdf_with_white_text_heading_overlay()
+    resp_alt = client.post(
+        "/analyze",
+        files={"file": ("altered_contract.pdf", alt_bytes, "application/pdf")},
+    )
+    assert resp_alt.status_code == 200
+    nts_alt = resp_alt.json()["non_technical_summary"]
+    assert nts_alt["is_proper"] is False
+    assert nts_alt["verdict_color"] == "red"
+    assert "tampered" in nts_alt["verdict_label"].lower() or "altered" in nts_alt["verdict_label"].lower()
+    assert "not rely" in nts_alt["trust_recommendation"].lower() or "verify" in nts_alt["trust_recommendation"].lower()
+    assert any(c["status"] == "warning" for c in nts_alt["checks"])
+
+    # 2. Clean document
+    clean_bytes = make_normal_pdf(text="Untouched authentic document for non-technical evaluation.")
+    resp_clean = client.post(
+        "/analyze",
+        files={"file": ("clean_doc.pdf", clean_bytes, "application/pdf")},
+    )
+    assert resp_clean.status_code == 200
+    nts_clean = resp_clean.json()["non_technical_summary"]
+    assert nts_clean["is_proper"] is True
+    assert nts_clean["verdict_color"] == "green"
+    assert "authentic" in nts_clean["verdict_label"].lower() or "clean" in nts_clean["verdict_label"].lower()
+    assert len(nts_clean["checks"]) == 4
+
 
 def test_three_layer_api_with_trusted_original_and_hash() -> None:
     """API executes verification comparison when original_file and expected_hash are provided."""

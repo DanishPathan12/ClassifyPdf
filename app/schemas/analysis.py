@@ -205,6 +205,34 @@ class UnifiedSummary(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class NonTechnicalCheck(BaseModel):
+    """An individual check item for non-technical evaluation."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(..., description="Check category title e.g. Content & Text Cover-Ups")
+    status: str = Field(..., description="clean | suspicious | warning | info")
+    headline: str = Field(..., description="Short status description")
+    detail: str = Field(..., description="Plain English description of findings")
+
+
+class NonTechnicalSummary(BaseModel):
+    """A shorter, conclusive, plain-English summary without technical jargon so users can decide if the PDF is proper."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    is_proper: bool | None = Field(
+        default=None,
+        description="True if document appears authentic/proper, False if altered/tampered, None if caution or inconclusive",
+    )
+    verdict_label: str = Field(default="Authentic & Clean", description="User-friendly status title")
+    verdict_color: str = Field(default="green", description="green | amber | red | gray")
+    headline: str = Field(default="", description="Concise conclusion statement")
+    explanation: str = Field(default="", description="1-3 sentence non-technical explanation")
+    trust_recommendation: str = Field(default="", description="Plain-English advice on whether to accept or verify")
+    checks: list[NonTechnicalCheck] = Field(default_factory=list, description="4 core non-technical checks")
+
+
 class UnifiedAnalysisResponse(BaseModel):
     """Unified API response matching the modern forensic specification while preserving backward compatibility."""
 
@@ -246,6 +274,10 @@ class UnifiedAnalysisResponse(BaseModel):
     overall_assessment: OverallAssessment | None = Field(
         default=None,
         description="High-level forensic status: confirmed_integrity_failure | suspicious_indicators_detected | inconclusive | no_suspicious_indicators_detected",
+    )
+    non_technical_summary: NonTechnicalSummary | None = Field(
+        default=None,
+        description="Shorter, conclusive non-technical summary enabling users to decide if the document is proper",
     )
     analyses: ThreeLayerAnalyses | None = Field(
         default=None,

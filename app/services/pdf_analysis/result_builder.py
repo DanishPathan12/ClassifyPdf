@@ -8,6 +8,8 @@ from typing import Any
 from app.models import FileInfo, Finding, MetadataContainer
 from app.schemas.analysis import (
     ForensicFinding,
+    NonTechnicalCheck,
+    NonTechnicalSummary,
     OverallAssessment,
     StructuralAnalysisLayer,
     TestCase1IncrementalResult,
@@ -294,6 +296,16 @@ def build_unified_response(
         else ["Review detailed structural and visual findings."]
     )
 
+    # Non-Technical Summary for intuitive, conclusive evaluation
+    non_tech_summary = build_non_technical_summary(
+        verdict=verdict,
+        confidence=confidence,
+        findings_list=findings_list,
+        metadata_container=metadata_container,
+        visual_layer=visual_layer,
+        verification_layer=verification_layer,
+    )
+
     return UnifiedAnalysisResponse(
         file_name=loaded_pdf.filename,
         file_hash_sha256=loaded_pdf.sha256,
@@ -309,7 +321,220 @@ def build_unified_response(
         test_cases=test_cases,
         summary=unified_summary,
         overall_assessment=overall_assess,
+        non_technical_summary=non_tech_summary,
         analyses=analyses_container,
         key_findings=key_findings,
         recommended_next_steps=recommended_steps,
+    )
+
+
+def build_non_technical_summary(
+    verdict: str,
+    confidence: float,
+    findings_list: list[ForensicFinding | Finding],
+    metadata_container: MetadataContainer,
+    visual_layer: Any | None = None,
+    verification_layer: Any | None = None,
+) -> NonTechnicalSummary:
+    """Build a plain-English, non-technical summary enabling a non-technical user to conclusively evaluate if the PDF is proper."""
+    finding_codes = {
+        getattr(f, "code", getattr(f, "id", ""))
+        for f in findings_list
+    }
+
+    # 1. Check: Content Alteration & Cover-Ups
+    has_white_text = "STRUCT_WHITE_TEXT_LAYER_OVERLAY" in finding_codes or "VISUAL_WHITE_TEXT_LAYER_OVERLAY" in finding_codes
+    has_whiteout_rect = "STRUCT_WHITEOUT_RECTANGLE_OVERLAY" in finding_codes or "VISUAL_WHITEOUT_PATCH_DETECTED" in finding_codes
+    has_text_overlap = "STRUCT_TEXT_OVERLAP" in finding_codes or "VISUAL_TEXT_COLLISION_OVERLAY" in finding_codes or "LAYOUT_TEXT_OVERLAP" in finding_codes
+
+    if has_white_text:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="warning",
+            headline="White Text Masking Layer Detected",
+            detail="Original text (such as heading or figures) was masked using a white font layer and overwritten with altered text.",
+        )
+    elif has_whiteout_rect:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="warning",
+            headline="Whiteout Redaction Patch Detected",
+            detail="A solid white patch was placed over existing content to cover it up, with replacement text typed on top.",
+        )
+    elif has_text_overlap:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="suspicious",
+            headline="Overlapping Conflicting Text",
+            detail="Multiple text segments collide in the exact same location, indicating possible manual additions.",
+        )
+    else:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="clean",
+            headline="No Cover-Ups Detected",
+            detail="Text and numbers appear naturally placed with no signs of whiteout patches, masking layers, or artificial overlays.",
+        )
+
+    # 2. Check: Visual Appearance & Page Uniformity
+    total_suspicious_regions = 0
+    if visual_layer and hasattr(visual_layer, "page_previews"):
+        total_suspicious_regions = sum(len(p.suspicious_regions) for p in visual_layer.page_previews)
+
+    if has_white_text or has_whiteout_rect:
+        check_visual = NonTechnicalCheck(
+            name="Visual Appearance",
+            status="warning",
+            headline="Visual Anomaly Highlighted",
+            detail=f"{total_suspicious_regions} area(s) show artificial visual boundaries or masked overlays requiring review.",
+        )
+    elif total_suspicious_regions > 0:
+        check_visual = NonTechnicalCheck(
+            name="Visual Appearance",
+            status="suspicious",
+            headline="Visual Outliers Detected",
+            detail=f"{total_suspicious_regions} region(s) show localized sharpness or texture variations.",
+        )
+    else:
+        check_visual = NonTechnicalCheck(
+            name="Visual Appearance",
+            status="clean",
+            headline="Visually Uniform",
+            detail="Rendered page textures, text sharpness, and background contrast appear consistent throughout.",
+        )
+
+    # 3. Check: Document History & Timestamps
+    has_date_inversion = "META_MODDATE_BEFORE_CREATION" in finding_codes
+    has_editing_tool = "META_KNOWN_EDITING_TOOL" in finding_codes
+    has_orphan_stream = "STREAM_UNREFERENCED_ORPHAN_OBJECTS" in finding_codes
+
+    if has_date_inversion:
+        check_dates = NonTechnicalCheck(
+            name="Document History & Dates",
+            status="warning",
+            headline="Inconsistent Timeline",
+            detail="File timestamps are conflicting: the modification time precedes the creation time.",
+        )
+    elif has_editing_tool or has_orphan_stream:
+        check_dates = NonTechnicalCheck(
+            name="Document History & Dates",
+            status="info",
+            headline="Re-saved / Post-Processed",
+            detail="The document shows indications of being re-saved or processed with an editing application after initial export.",
+        )
+    else:
+        check_dates = NonTechnicalCheck(
+            name="Document History & Dates",
+            status="clean",
+            headline="Consistent Timeline",
+            detail="Document timestamps and internal structure are consistent and show no signs of manipulation.",
+        )
+
+    # 4. Check: Digital Signatures & Seal
+    has_sig_tampered = "SIG_POST_SIGNING_MODIFICATION" in finding_codes or "SIG_CRYPTO_DIGEST_INVALID" in finding_codes
+    is_signed = False
+    if verification_layer and hasattr(verification_layer, "signature_results"):
+        is_signed = len(verification_layer.signature_results) > 0
+
+    if has_sig_tampered:
+        check_signature = NonTechnicalCheck(
+            name="Digital Seal & Signatures",
+            status="warning",
+            headline="Digital Seal Broken",
+            detail="The document was digitally signed, but changes were made after signing that invalidated the signature.",
+        )
+    elif is_signed:
+        check_signature = NonTechnicalCheck(
+            name="Digital Seal & Signatures",
+            status="clean",
+            headline="Digitally Signed & Valid",
+            detail="The document contains an authentic, cryptographically intact digital signature.",
+        )
+    else:
+        check_signature = NonTechnicalCheck(
+            name="Digital Seal & Signatures",
+            status="info",
+            headline="Standard Unsigned Document",
+            detail="No digital signature was applied (normal for standard commercial PDFs).",
+        )
+
+    checklist = [check_content, check_visual, check_dates, check_signature]
+
+    # Synthesize conclusive plain-English verdict
+    if verdict == "likely_edited":
+        is_proper = False
+        verdict_label = "Potentially Tampered / Altered Document"
+        verdict_color = "red"
+        headline = "Evidence indicates this document was modified after creation."
+        if has_white_text:
+            explanation = (
+                "This document shows clear signs of post-creation editing. Specifically, an intentional white text "
+                "masking layer was placed over a heading or numerical figure, and altered text was typed on top to replace it."
+            )
+        elif has_whiteout_rect:
+            explanation = (
+                "This document contains an opaque whiteout patch covering original content, with new text typed over it. "
+                "This is a common method used in document alteration."
+            )
+        elif has_sig_tampered:
+            explanation = (
+                "This document was digitally signed, but content was modified after signing, breaking the digital authenticity seal."
+            )
+        else:
+            explanation = (
+                "Multiple structural and visual anomalies indicate that portions of this document have been altered "
+                "or re-composed using a PDF editing application."
+            )
+        trust_recommendation = (
+            "DO NOT RELY on the key figures, names, or terms in this document. "
+            "We strongly recommend requesting an authenticated original directly from the issuing party."
+        )
+
+    elif verdict == "suspicious_indicators":
+        is_proper = None
+        verdict_label = "Caution: Suspicious Inconsistencies Found"
+        verdict_color = "amber"
+        headline = "Some unusual formatting or timeline inconsistencies warrant review."
+        explanation = (
+            "We detected minor anomalies such as overlapping text lines or re-saving traces. "
+            "While these can occasionally occur in complex document templates, they may also indicate manual adjustments."
+        )
+        trust_recommendation = (
+            "Review the highlighted areas on the visual page preview. Before taking critical action, "
+            "verify key terms or totals with the sender."
+        )
+
+    elif verdict == "no_edit_evidence_found":
+        is_proper = True
+        verdict_label = "Proper & Likely Authentic"
+        verdict_color = "green"
+        headline = "No evidence of tampering or alteration was detected."
+        explanation = (
+            "All text placement, visual sharpness, and document structures appear consistent and normal. "
+            "The document does not contain covered text, whiteout boxes, or broken signatures."
+        )
+        trust_recommendation = (
+            "This document appears authentic and proper for standard review and archiving."
+        )
+
+    else:
+        is_proper = None
+        verdict_label = "Inconclusive Analysis"
+        verdict_color = "gray"
+        headline = "The document could not be reliably inspected."
+        explanation = (
+            "The document is password-protected, encrypted, or corrupted, preventing our tools from inspecting its internal contents."
+        )
+        trust_recommendation = (
+            "Provide an unencrypted, non-password-protected copy of the PDF to perform a complete authenticity check."
+        )
+
+    return NonTechnicalSummary(
+        is_proper=is_proper,
+        verdict_label=verdict_label,
+        verdict_color=verdict_color,
+        headline=headline,
+        explanation=explanation,
+        trust_recommendation=trust_recommendation,
+        checks=checklist,
     )
