@@ -241,6 +241,13 @@ def build_unified_response(
             summary=struct_summary,
             findings=struct_findings,
             limitations=struct_limits,
+            formatting_anomalies_count=getattr(structural_layer, "formatting_anomalies_count", 0) if structural_layer else 0,
+            text_overlaps_count=getattr(structural_layer, "text_overlaps_count", 0) if structural_layer else 0,
+            covering_objects_count=getattr(structural_layer, "covering_objects_count", 0) if structural_layer else 0,
+            text_replacements_count=getattr(structural_layer, "text_replacements_count", 0) if structural_layer else 0,
+            text_insertions_count=getattr(structural_layer, "text_insertions_count", 0) if structural_layer else 0,
+            revision_history_available=getattr(structural_layer, "revision_history_available", False) if structural_layer else False,
+            historical_comparison_status=getattr(structural_layer, "historical_comparison_status", "unavailable") if structural_layer else "unavailable",
         ),
         visual=VisualAnalysisLayer(
             status=visual_status,
@@ -345,7 +352,11 @@ def build_non_technical_summary(
     # 1. Check: Content Alteration & Cover-Ups
     has_white_text = "STRUCT_WHITE_TEXT_LAYER_OVERLAY" in finding_codes or "VISUAL_WHITE_TEXT_LAYER_OVERLAY" in finding_codes
     has_whiteout_rect = "STRUCT_WHITEOUT_RECTANGLE_OVERLAY" in finding_codes or "VISUAL_WHITEOUT_PATCH_DETECTED" in finding_codes
+    has_text_replacement = "STRUCT_POSSIBLE_TEXT_REPLACEMENT" in finding_codes or "REV_TEXT_CHANGE_DETECTED" in finding_codes
+    has_covering_obj = "STRUCT_POSSIBLE_COVERING_OBJECT" in finding_codes
+    has_annot_overlay = "STRUCT_ANNOTATION_OVERLAY" in finding_codes
     has_text_overlap = "STRUCT_TEXT_OVERLAP" in finding_codes or "VISUAL_TEXT_COLLISION_OVERLAY" in finding_codes or "LAYOUT_TEXT_OVERLAP" in finding_codes
+    has_text_insertion = "STRUCT_POSSIBLE_TEXT_INSERTION" in finding_codes
 
     if has_white_text:
         check_content = NonTechnicalCheck(
@@ -354,12 +365,33 @@ def build_non_technical_summary(
             headline="White Text Masking Layer Detected",
             detail="Original text (such as heading or figures) was masked using a white font layer and overwritten with altered text.",
         )
-    elif has_whiteout_rect:
+    elif has_text_replacement:
         check_content = NonTechnicalCheck(
             name="Content & Text Cover-Ups",
             status="warning",
-            headline="Whiteout Redaction Patch Detected",
-            detail="A solid white patch was placed over existing content to cover it up, with replacement text typed on top.",
+            headline="Text Replacement Detected",
+            detail="Existing text or numbers appear to have been covered, removed, or replaced with altered content.",
+        )
+    elif has_whiteout_rect or has_covering_obj:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="warning",
+            headline="Covering Object / Whiteout Detected",
+            detail="An opaque covering object or patch was placed over existing content, obscuring underlying text.",
+        )
+    elif has_annot_overlay:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="warning",
+            headline="Annotation Cover-Up Detected",
+            detail="A form field or annotation was placed directly over document text to overwrite original figures.",
+        )
+    elif has_text_insertion:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="suspicious",
+            headline="Unusual Text Insertion",
+            detail="Text with differing characteristics appears inserted into an otherwise uniform section.",
         )
     elif has_text_overlap:
         check_content = NonTechnicalCheck(
@@ -405,10 +437,18 @@ def build_non_technical_summary(
 
     # 3. Check: Document History & Timestamps
     has_date_inversion = "META_MODDATE_BEFORE_CREATION" in finding_codes
+    has_rev_text_change = "REV_TEXT_CHANGE_DETECTED" in finding_codes
     has_editing_tool = "META_KNOWN_EDITING_TOOL" in finding_codes
     has_orphan_stream = "STREAM_UNREFERENCED_ORPHAN_OBJECTS" in finding_codes
 
-    if has_date_inversion:
+    if has_rev_text_change:
+        check_dates = NonTechnicalCheck(
+            name="Document History & Revisions",
+            status="warning",
+            headline="Content Modified Across Revisions",
+            detail="Direct text changes were detected between earlier and later revisions stored inside the PDF.",
+        )
+    elif has_date_inversion:
         check_dates = NonTechnicalCheck(
             name="Document History & Dates",
             status="warning",
@@ -470,6 +510,11 @@ def build_non_technical_summary(
             explanation = (
                 "This document shows clear signs of post-creation editing. Specifically, an intentional white text "
                 "masking layer was placed over a heading or numerical figure, and altered text was typed on top to replace it."
+            )
+        elif has_text_replacement:
+            explanation = (
+                "This document shows structural or historical evidence of text replacement. "
+                "Existing content appears to have been covered, removed, or overwritten across revisions."
             )
         elif has_whiteout_rect:
             explanation = (

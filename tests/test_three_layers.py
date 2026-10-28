@@ -426,3 +426,126 @@ def test_three_layer_api_with_trusted_original_and_hash() -> None:
     assert data["overall_assessment"]["status"] == "confirmed_integrity_failure"
     assert data["overall_assessment"]["score"] >= 0.90
 
+
+def test_visual_layer_no_false_positive_on_bar_graphs() -> None:
+    """Bar graphs with multiple identical bars, white plot background, and spacing must NOT trigger false positives."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    # Title
+    page.insert_text(fitz.Point(72, 60), "Quarterly Performance Revenue Breakdown", fontsize=16)
+
+    # Chart canvas / white plot area rectangle with borders
+    plot_rect = fitz.Rect(72, 90, 520, 320)
+    page.draw_rect(plot_rect, color=(0.7, 0.7, 0.7), fill=(1.0, 1.0, 1.0))
+
+    # Multiple identical vertical bars with whitespace between them
+    bar_color = (0.2, 0.4, 0.8)
+    for i, x in enumerate([100, 160, 220, 280, 340, 400]):
+        bar_rect = fitz.Rect(x, 150, x + 35, 300)
+        page.draw_rect(bar_rect, color=bar_color, fill=bar_color)
+        page.insert_text(fitz.Point(x + 5, 315), f"Q{i + 1}", fontsize=10)
+
+    # Axis line
+    page.draw_line(fitz.Point(72, 300), fitz.Point(520, 300), color=(0.3, 0.3, 0.3), width=1.5)
+
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    loaded = load_pdf(pdf_bytes, filename="bar_graph_clean.pdf")
+    res = analyze_visual_layer(loaded, dpi=120)
+
+    assert res.status == "completed"
+    preview = res.page_previews[0]
+
+    # No false copy-move on identical bars
+    copy_move_regs = [r for r in preview.suspicious_regions if r.technique == "copy_move"]
+    assert len(copy_move_regs) == 0
+
+    # No false whiteout detection on chart background or bar spacing
+    whiteout_regs = [r for r in preview.suspicious_regions if r.technique == "background_texture"]
+    assert len(whiteout_regs) == 0
+
+    # Total suspicious regions must be zero
+    assert len(preview.suspicious_regions) == 0
+
+
+def test_visual_layer_no_false_positive_on_tables() -> None:
+    """Table layouts with grid lines, bold headers, and short cell numbers must NOT trigger false edge anomalies."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    page.insert_text(fitz.Point(72, 60), "Vendor Invoice - Billing Breakdown", fontsize=16)
+
+    # Draw table grid lines
+    # Horizontal lines
+    for y in [100, 125, 150, 175, 200, 225]:
+        page.draw_line(fitz.Point(72, y), fitz.Point(520, y), color=(0.2, 0.2, 0.2), width=1.0)
+    # Vertical lines
+    for x in [72, 220, 320, 420, 520]:
+        page.draw_line(fitz.Point(x, 100), fitz.Point(x, 225), color=(0.2, 0.2, 0.2), width=1.0)
+
+    # Header cells
+    page.insert_text(fitz.Point(80, 118), "Description", fontsize=11, fontname="hebo")
+    page.insert_text(fitz.Point(230, 118), "Hours", fontsize=11, fontname="hebo")
+    page.insert_text(fitz.Point(330, 118), "Rate", fontsize=11, fontname="hebo")
+    page.insert_text(fitz.Point(430, 118), "Amount", fontsize=11, fontname="hebo")
+
+    # Data row cells
+    rows = [
+        ("Cloud Infrastructure Consulting", "40", "$150.00", "$6,000.00"),
+        ("Security Audit & Pentesting", "20", "$175.00", "$3,500.00"),
+        ("Database Migration Support", "15", "$150.00", "$2,250.00"),
+        ("Technical Architecture Review", "10", "$180.00", "$1,800.00"),
+    ]
+    for idx, (desc, hrs, rate, amt) in enumerate(rows):
+        y = 143 + (idx * 25)
+        page.insert_text(fitz.Point(80, y), desc, fontsize=10)
+        page.insert_text(fitz.Point(230, y), hrs, fontsize=10)
+        page.insert_text(fitz.Point(330, y), rate, fontsize=10)
+        page.insert_text(fitz.Point(430, y), amt, fontsize=10)
+
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    loaded = load_pdf(pdf_bytes, filename="table_clean.pdf")
+    res = analyze_visual_layer(loaded, dpi=120)
+
+    assert res.status == "completed"
+    preview = res.page_previews[0]
+
+    # No false text_edge findings on table cells or grid lines
+    edge_regs = [r for r in preview.suspicious_regions if r.technique == "text_edge"]
+    assert len(edge_regs) == 0
+
+    # No false whiteout findings on table cells
+    whiteout_regs = [r for r in preview.suspicious_regions if r.technique == "background_texture"]
+    assert len(whiteout_regs) == 0
+
+    assert len(preview.suspicious_regions) == 0
+
+
+def test_structural_layer_detects_annotation_overlay() -> None:
+    """FreeText annotation placed directly over text must be detected as an unauthorized overlay."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    page.insert_text(fitz.Point(72, 100), "Payable to: Original Vendor Corp", fontsize=12)
+
+    # Place a FreeText annotation directly over the payee name
+    annot_rect = fitz.Rect(140, 85, 280, 115)
+    annot = page.add_freetext_annot(annot_rect, "Fraudulent Recipient LLC", fontsize=11)
+    annot.update()
+
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    loaded = load_pdf(pdf_bytes, filename="annot_tampered.pdf")
+    res = analyze_structural_layer(loaded)
+
+    assert res.status == "completed"
+    annot_findings = [f for f in res.findings if f.code == "STRUCT_ANNOTATION_OVERLAY"]
+    assert len(annot_findings) >= 1
+    assert "FreeText" in annot_findings[0].description
+
+

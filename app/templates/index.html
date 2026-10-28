@@ -817,6 +817,35 @@
 
       <!-- Tab 1: Structural Analysis -->
       <div class="tab-pane" id="tab-structural">
+        <!-- Text Insertion & Replacement Forensic Audit Card -->
+        <div class="card" style="margin-bottom: 1rem;">
+          <h4 style="color: #94a3b8; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem;">
+            Text Insertion & Replacement Audit
+          </h4>
+          <div class="grid-2col" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 0.5rem;">
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 0.65rem 0.85rem; border-radius: 6px; border: 1px solid var(--border-color);">
+              <div style="font-size: 0.75rem; color: #94a3b8;">Covering Objects</div>
+              <div id="structCoveringCount" style="font-size: 1.35rem; font-weight: 700; color: #f8fafc;">0</div>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 0.65rem 0.85rem; border-radius: 6px; border: 1px solid var(--border-color);">
+              <div style="font-size: 0.75rem; color: #94a3b8;">Text Replacements</div>
+              <div id="structReplacementCount" style="font-size: 1.35rem; font-weight: 700; color: #f8fafc;">0</div>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 0.65rem 0.85rem; border-radius: 6px; border: 1px solid var(--border-color);">
+              <div style="font-size: 0.75rem; color: #94a3b8;">Text Overlaps</div>
+              <div id="structOverlapCount" style="font-size: 1.35rem; font-weight: 700; color: #f8fafc;">0</div>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 0.65rem 0.85rem; border-radius: 6px; border: 1px solid var(--border-color);">
+              <div style="font-size: 0.75rem; color: #94a3b8;">Formatting Anomalies</div>
+              <div id="structFormattingCount" style="font-size: 1.35rem; font-weight: 700; color: #f8fafc;">0</div>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 0.65rem 0.85rem; border-radius: 6px; border: 1px solid var(--border-color);">
+              <div style="font-size: 0.75rem; color: #94a3b8;">Revision Comparison</div>
+              <div id="structRevHistoryStatus" style="font-size: 0.82rem; font-weight: 600; color: #38bdf8; margin-top: 0.35rem;">Single Revision</div>
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <h3>🧱 Layer 1: PDF Internal Structure & Object Audit</h3>
           <p id="structuralSummary" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">-</p>
@@ -1181,8 +1210,45 @@
       if (summaryDocCreated) summaryDocCreated.textContent = res.metadata?.dates?.creation_date || 'Standard / Unspecified';
 
       // 2. Tab 1: Structural Analysis
-      document.getElementById('structuralSummary').textContent = analyses.structural?.summary || 'Structural analysis completed.';
-      renderFindingsGroup(document.getElementById('structuralFindingsList'), analyses.structural?.findings || []);
+      const structLayer = analyses.structural || {};
+      document.getElementById('structuralSummary').textContent = structLayer.summary || 'Structural analysis completed.';
+      
+      const coveringEl = document.getElementById('structCoveringCount');
+      if (coveringEl) {
+        const count = structLayer.covering_objects_count || 0;
+        coveringEl.textContent = count;
+        coveringEl.style.color = count > 0 ? '#f87171' : '#34d399';
+      }
+      const replEl = document.getElementById('structReplacementCount');
+      if (replEl) {
+        const count = structLayer.text_replacements_count || 0;
+        replEl.textContent = count;
+        replEl.style.color = count > 0 ? '#f87171' : '#34d399';
+      }
+      const overlapEl = document.getElementById('structOverlapCount');
+      if (overlapEl) {
+        const count = structLayer.text_overlaps_count || 0;
+        overlapEl.textContent = count;
+        overlapEl.style.color = count > 0 ? '#fbbf24' : '#34d399';
+      }
+      const formatEl = document.getElementById('structFormattingCount');
+      if (formatEl) {
+        const count = structLayer.formatting_anomalies_count || 0;
+        formatEl.textContent = count;
+        formatEl.style.color = count > 0 ? '#fbbf24' : '#34d399';
+      }
+      const revEl = document.getElementById('structRevHistoryStatus');
+      if (revEl) {
+        if (structLayer.revision_history_available) {
+          revEl.textContent = 'Multi-Revision History Analyzed';
+          revEl.style.color = '#34d399';
+        } else {
+          revEl.textContent = structLayer.historical_comparison_status || 'Single Revision (Historical N/A)';
+          revEl.style.color = '#94a3b8';
+        }
+      }
+
+      renderFindingsGroup(document.getElementById('structuralFindingsList'), structLayer.findings || []);
 
       // 3. Tab 2: Visual Analysis & Viewer
       document.getElementById('visualSummary').textContent = analyses.visual?.summary || 'Visual analysis completed.';
@@ -1333,15 +1399,42 @@
         const title = f.title || f.code || 'Forensic Finding';
         const desc = f.description || f.explanation || '';
         const limitations = f.limitations && f.limitations.length > 0 ? f.limitations.join('; ') : '';
+        const alts = f.alternative_explanations && f.alternative_explanations.length > 0 ? f.alternative_explanations.join('; ') : '';
+        const action = f.recommended_action || '';
+
+        let confBadges = '';
+        if (f.anomaly_confidence !== undefined && f.anomaly_confidence !== null) {
+          const aPct = Math.round(f.anomaly_confidence * 100);
+          confBadges += `<span class="badge badge-info" style="font-size: 0.72rem;">Anomaly: ${aPct}%</span> `;
+        }
+        if (f.tampering_confidence !== undefined && f.tampering_confidence !== null) {
+          const tPct = Math.round(f.tampering_confidence * 100);
+          const tClass = tPct >= 70 ? 'badge-high' : (tPct >= 40 ? 'badge-medium' : 'badge-low');
+          confBadges += `<span class="badge ${tClass}" style="font-size: 0.72rem;">Tampering: ${tPct}%</span> `;
+        }
+
+        let locStr = '';
+        if (f.page) locStr += `Page ${f.page} `;
+        if (f.region) {
+          locStr += `(bbox: [${Math.round(f.region.x0 || 0)}, ${Math.round(f.region.y0 || 0)}, ${Math.round(f.region.x1 || 0)}, ${Math.round(f.region.y1 || 0)}])`;
+        }
 
         div.innerHTML = `
           <div class="finding-header">
-            <span class="finding-title">${escapeHtml(title)} <span style="font-size: 0.75rem; color: #64748b; font-family: monospace;">[${escapeHtml(f.code || '')}]</span></span>
-            <span class="badge ${sevClass}">${escapeHtml(f.severity || 'info')}</span>
+            <div>
+              <span class="finding-title">${escapeHtml(title)} <span style="font-size: 0.75rem; color: #64748b; font-family: monospace;">[${escapeHtml(f.code || '')}]</span></span>
+              ${locStr ? `<span style="font-size: 0.75rem; color: #94a3b8; margin-left: 0.5rem;">📍 ${escapeHtml(locStr)}</span>` : ''}
+            </div>
+            <div style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
+              ${confBadges}
+              <span class="badge ${sevClass}">${escapeHtml(f.severity || 'info')}</span>
+            </div>
           </div>
           <div style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 0.5rem;">${escapeHtml(desc)}</div>
           ${f.evidence && Object.keys(f.evidence).length > 0 ? `<pre class="evidence-box">${escapeHtml(JSON.stringify(f.evidence, null, 2))}</pre>` : ''}
-          ${limitations ? `<p style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;"><em>Forensic Limitations:</em> ${escapeHtml(limitations)}</p>` : ''}
+          ${alts ? `<p style="font-size: 0.8rem; color: #38bdf8; margin-top: 0.4rem; margin-bottom: 0.2rem;">💡 <em>Legitimate Explanations:</em> ${escapeHtml(alts)}</p>` : ''}
+          ${limitations ? `<p style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.2rem; margin-bottom: 0.2rem;">⚠️ <em>Forensic Limitations:</em> ${escapeHtml(limitations)}</p>` : ''}
+          ${action ? `<p style="font-size: 0.8rem; color: #fbbf24; margin-top: 0.2rem; margin-bottom: 0.2rem;">🔍 <em>Recommended Action:</em> ${escapeHtml(action)}</p>` : ''}
         `;
         container.appendChild(div);
       });

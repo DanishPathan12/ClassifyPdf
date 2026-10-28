@@ -229,7 +229,10 @@ def analyze_revision_structure(loaded_pdf: LoadedPdf) -> RevisionForensicsResult
             except Exception as hist_err:
                 logger.debug("Historical resolver inspection note: %s", hist_err)
 
-        # Attempt to validate earlier revision bytes
+        # Attempt to validate earlier revision bytes and compare text content
+        text_change_found = False
+        old_text_sample = ""
+        new_text_sample = ""
         if reader is not None and total_revisions > 1:
             try:
                 sxref = reader.xrefs.get_startxref_for_revision(0)
@@ -239,8 +242,55 @@ def analyze_revision_structure(loaded_pdf: LoadedPdf) -> RevisionForensicsResult
                     with pikepdf.Pdf.open(io.BytesIO(slice_0)) as test_p:
                         if len(test_p.pages) > 0:
                             recovered_revision_ok = True
+
+                    # Compare text content between revision 0 and current revision
+                    try:
+                        import pymupdf as fitz
+                        doc_prev = fitz.open(stream=slice_0, filetype="pdf")
+                        doc_curr = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+                        prev_text = " ".join(p.get_text() for p in doc_prev).strip()
+                        curr_text = " ".join(p.get_text() for p in doc_curr).strip()
+
+                        if prev_text and curr_text and prev_text != curr_text:
+                            text_change_found = True
+                            old_text_sample = prev_text[:80]
+                            new_text_sample = curr_text[:80]
+                        doc_prev.close()
+                        doc_curr.close()
+                    except Exception:
+                        pass
             except Exception:
                 pass
+
+        if text_change_found:
+            findings.append(
+                ForensicFinding(
+                    code="REV_TEXT_CHANGE_DETECTED",
+                    category="revision_change_detected",
+                    domain="revision_history",
+                    severity="high",
+                    confidence=0.85,
+                    anomaly_confidence=0.95,
+                    tampering_confidence=0.80,
+                    description=(
+                        f"Direct text modification recovered across revision 1 and revision {total_revisions}: "
+                        "historical text differed from current text."
+                    ),
+                    evidence={
+                        "revision_count": total_revisions,
+                        "old_text_sample": old_text_sample,
+                        "new_text_sample": new_text_sample,
+                    },
+                    limitations=[
+                        "Incremental document revisions can represent legitimate edits, corrections, or normal authorized version updates in standard workflow tools.",
+                    ],
+                    alternative_explanations=[
+                        "Authorized form filling or contract revision saved via standard incremental update.",
+                    ],
+                    recommended_action="Inspect differences between the historical revision and current revision to verify authorization.",
+                )
+            )
 
         # Distinguish suspicious structural replacement from benign incremental updates
         if suspicious_structural_replacement:
@@ -312,6 +362,10 @@ def analyze_revision_structure(loaded_pdf: LoadedPdf) -> RevisionForensicsResult
 
         legacy_status = "changes_detected"
     else:
+        limitations.append(
+            "The document has been fully rewritten in a single revision without accessible prior revisions; "
+            "historical comparison across revisions could not be performed."
+        )
         findings.append(
             ForensicFinding(
                 code="REV_NO_INCREMENTAL_REVISIONS",

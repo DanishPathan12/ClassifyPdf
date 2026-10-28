@@ -35,7 +35,7 @@ class ForensicFinding(BaseModel):
     code: str = Field(..., description="Stable machine-readable code e.g. SIG_POST_SIGNING_MODIFICATION")
     category: str = Field(
         default="suspicious",
-        description="Forensic category classification: confirmed | suspicious | inconclusive",
+        description="Forensic category classification: confirmed | suspicious | inconclusive | formatting_anomaly | unusual_text_position | text_overlap | possible_covering_object | possible_text_replacement | possible_text_insertion | revision_change_detected | structural_integrity_issue",
     )
     domain: str = Field(
         default="general",
@@ -52,6 +52,14 @@ class ForensicFinding(BaseModel):
     title: str | None = Field(default=None, description="Human-readable title")
     explanation: str | None = Field(default=None, description="Alias for description")
 
+    # Enhanced Text-Object & Covering Analysis fields
+    page: int | None = Field(default=None, description="Affected 1-based page number")
+    region: dict[str, float] | None = Field(default=None, description="Bounding coordinates {x0, y0, x1, y1}")
+    anomaly_confidence: float | None = Field(default=None, description="Confidence in detecting the observed anomaly")
+    tampering_confidence: float | None = Field(default=None, description="Confidence that the anomaly represents tampering")
+    alternative_explanations: list[str] = Field(default_factory=list, description="Legitimate, non-malicious reasons for condition")
+    recommended_action: str | None = Field(default=None, description="Actionable next step for verification")
+
     def model_post_init(self, __context: Any) -> None:
         if self.id is None:
             self.id = self.code
@@ -59,6 +67,29 @@ class ForensicFinding(BaseModel):
             self.title = self.code.replace("_", " ").title()
         if self.explanation is None:
             self.explanation = self.description
+
+        # Infer page from evidence if not explicitly supplied
+        if self.page is None and isinstance(self.evidence, dict):
+            if "page" in self.evidence and isinstance(self.evidence["page"], int):
+                self.page = self.evidence["page"]
+
+        # Infer region from evidence if not explicitly supplied
+        if self.region is None and isinstance(self.evidence, dict):
+            b = self.evidence.get("bbox") or self.evidence.get("bbox_pdf") or self.evidence.get("rect")
+            if isinstance(b, (list, tuple)) and len(b) >= 4:
+                self.region = {"x0": float(b[0]), "y0": float(b[1]), "x1": float(b[2]), "y1": float(b[3])}
+
+        # Calibrate anomaly vs tampering confidence defaults if omitted
+        if self.anomaly_confidence is None:
+            self.anomaly_confidence = self.confidence
+        if self.tampering_confidence is None:
+            # Anomaly does not necessarily imply deliberate tampering
+            if self.severity == "high":
+                self.tampering_confidence = min(0.85, self.confidence)
+            elif self.severity == "medium":
+                self.tampering_confidence = min(0.60, self.confidence * 0.85)
+            else:
+                self.tampering_confidence = min(0.35, self.confidence * 0.60)
 
 
 class ChangeLocation(BaseModel):
@@ -316,6 +347,15 @@ class StructuralAnalysisLayer(BaseModel):
     summary: str = Field(default="", description="Structural findings summary")
     findings: list[ForensicFinding] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+
+    # Granular text tampering & object overlay counters
+    formatting_anomalies_count: int = Field(default=0, ge=0)
+    text_overlaps_count: int = Field(default=0, ge=0)
+    covering_objects_count: int = Field(default=0, ge=0)
+    text_replacements_count: int = Field(default=0, ge=0)
+    text_insertions_count: int = Field(default=0, ge=0)
+    revision_history_available: bool = Field(default=False)
+    historical_comparison_status: str = Field(default="unavailable")
 
 
 class VisualAnalysisLayer(BaseModel):
