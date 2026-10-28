@@ -236,24 +236,14 @@ def run_pdf_analysis(
     # 7. Layer 1: Structural Analysis (Deep text spans, whiteouts, images, annotations)
     structural_layer = None
     try:
-        structural_layer = analyze_structural_layer(loaded_pdf)
+        structural_layer = analyze_structural_layer(loaded_pdf, original_source=original_source)
         all_forensic_findings.extend(structural_layer.findings)
         module_limitations.extend(structural_layer.limitations)
     except Exception as struct_err:
         logger.error("Structural layer analysis failed: %s", struct_err, exc_info=True)
         module_limitations.append(f"Structural analysis error: {struct_err}")
 
-    # 8. Layer 2: Visual & Pixel-Level Analysis (DPI rendering, text-edges, whiteouts, copy-move)
-    visual_layer = None
-    try:
-        visual_layer = analyze_visual_layer(loaded_pdf)
-        all_forensic_findings.extend(visual_layer.findings)
-        module_limitations.extend(visual_layer.limitations)
-    except Exception as vis_err:
-        logger.error("Visual layer analysis failed: %s", vis_err, exc_info=True)
-        module_limitations.append(f"Visual analysis error: {vis_err}")
-
-    # 9. Layer 3: Independent Verification (Signatures, trusted original diff, hash check)
+    # 8. Layer 3: Independent Verification (Signatures, trusted original diff, hash check)
     verification_layer = None
     try:
         orig_bytes = None
@@ -274,6 +264,20 @@ def run_pdf_analysis(
     except Exception as ver_err:
         logger.error("Verification layer analysis failed: %s", ver_err, exc_info=True)
         module_limitations.append(f"Independent verification error: {ver_err}")
+
+    # 9. Layer 2: Visual & Pixel-Level Analysis (DPI rendering, structural overlay, text-edges, whiteouts)
+    visual_layer = None
+    try:
+        # Pass all accumulated structural and verification findings to generate visual overlays
+        visual_layer = analyze_visual_layer(
+            loaded_pdf,
+            structural_findings=list(all_forensic_findings),
+        )
+        all_forensic_findings.extend(visual_layer.findings)
+        module_limitations.extend(visual_layer.limitations)
+    except Exception as vis_err:
+        logger.error("Visual layer analysis failed: %s", vis_err, exc_info=True)
+        module_limitations.append(f"Visual analysis error: {vis_err}")
 
     # 10. Deduplicate exact duplicate findings
     unique_findings: list[ForensicFinding] = []

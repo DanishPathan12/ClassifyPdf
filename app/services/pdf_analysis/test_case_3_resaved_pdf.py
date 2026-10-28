@@ -279,3 +279,32 @@ def _detect_inconsistent_fonts_in_line(
                             interpretation="Potential anomaly; not proof of editing (may reflect intentional emphasis)",
                         )
                     )
+
+
+def _detect_placeholder_text(
+    layout: PageLayout,
+    page_num: int,
+    findings: list[ResavedFinding],
+) -> None:
+    """Detect default PDF editor placeholder residue like 'Type your text'."""
+    import re
+    pat = re.compile(
+        r"^(type\s+your\s+text|insert\s+text(\s+here)?|click\s+(here\s+)?to\s+(add|edit|type)\s+text|"
+        r"add\s+text(\s+here)?|enter\s+text(\s+here)?|your\s+text\s+here|sample\s+text|"
+        r"double\s+click\s+to\s+edit|text\s+box|placeholder(\s+text)?|lorem\s+ipsum)",
+        re.IGNORECASE,
+    )
+    for line in layout.text_lines:
+        txt = line.text.strip()
+        if pat.match(txt):
+            findings.append(
+                ResavedFinding(
+                    type="isolated_text_overlay",
+                    page=page_num,
+                    description=f"Editor placeholder residue text '{txt}' detected at {line.bbox}",
+                    location=ChangeLocation(bbox=line.bbox),
+                    evidence={"text": txt, "bbox": line.bbox},
+                    confidence="medium",
+                    interpretation="Potential anomaly; placeholder strings are characteristic artifacts of manual PDF editing tools",
+                )
+            )

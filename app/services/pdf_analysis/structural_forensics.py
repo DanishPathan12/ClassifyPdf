@@ -175,6 +175,19 @@ def _inspect_unreferenced_objects(pdf: pikepdf.Pdf, findings: list[ForensicFindi
         return 0
 
 
+def _strip_pdf_string_literals(data: bytes) -> bytes:
+    """Strip PDF comments, literal strings, hex strings, and name tokens before tokenizing operators."""
+    # Strip comments
+    data = re.sub(rb"%[^\r\n]*", b" ", data)
+    # Strip hex strings <...>
+    data = re.sub(rb"<[0-9a-fA-F\s]*>", b" ", data)
+    # Strip literal strings (...)
+    data = re.sub(rb"\((?:\\.|[^)])*\)", b" ", data)
+    # Strip name tokens /...
+    data = re.sub(rb"/[^\s/()<>\[\]{}]+", b" ", data)
+    return data
+
+
 def _inspect_page_streams(
     page: pikepdf.Page,
     page_num: int,
@@ -206,19 +219,75 @@ def _inspect_page_streams(
                     pass
 
     if len(streams_bytes) > 1:
-        # Flag multiple content streams as an informational/low structural note
+        # Check if secondary/appended content streams contain text operators (Tj, TJ)
+        appended_text_streams: list[int] = []
+        for s_idx in range(1, len(streams_bytes)):
+            sub_s = streams_bytes[s_idx]
+            if (b"Tj" in sub_s) or (b"TJ" in sub_s) or (b"'" in sub_s) or (b"\"" in sub_s):
+                appended_text_streams.append(s_idx + 1)
+
+        if appended_text_streams:
+            findings.append(
+                ForensicFinding(
+                    code="STREAM_APPENDED_CONTENT_STREAM_TEXT",
+                    category="possible_text_insertion",
+                    domain="content_stream",
+                    severity="medium",
+                    confidence=0.70,
+                    description=(
+                        f"Page {page_num} contains text rendered inside appended secondary content stream(s) "
+                        f"(stream(s) {', '.join(str(i) for i in appended_text_streams)} of {len(streams_bytes)}). "
+                        "This layered structure is characteristic of third-party PDF editors adding or overlaying content."
+                    ),
+                    evidence={
+                        "page": page_num,
+                        "stream_count": len(streams_bytes),
+                        "appended_text_stream_indices": appended_text_streams,
+                    },
+                    limitations=[
+                        "Watermarking software and automated stamping tools also append content streams legitimately.",
+                    ],
+                    alternative_explanations=[
+                        "Document management system watermark or stamp.",
+                        "Legitimate letterhead or form background overlay.",
+                    ],
+                    recommended_action="Inspect text on this page to verify if newly added text aligns with the original document.",
+                )
+            )
+        else:
+            findings.append(
+                ForensicFinding(
+                    code="STREAM_MULTIPLE_PAGE_CONTENTS",
+                    category="content_stream",
+                    severity="low",
+                    confidence=0.15,
+                    description=f"Page {page_num} uses multiple ({len(streams_bytes)}) content streams; often used for layered content, background graphics, or watermarks",
+                    evidence={"page": page_num, "stream_count": len(streams_bytes)},
+                    limitations=[
+                        "PDF generators commonly split headers, footers, watermarks, and background forms into separate streams.",
+                        "Not proof of unauthorized modification.",
+                    ],
+                )
+            )
+
+    # 1. Page-level graphics state push/pop balance check
+    # Graphics state (q / Q) in PDF spans across the concatenated stream sequence of the entire page
+    combined_page_stream = b" \n ".join(streams_bytes)
+    cleaned_bytes = _strip_pdf_string_literals(combined_page_stream)
+    tokens = cleaned_bytes.split()
+    total_q = tokens.count(b"q")
+    total_Q = tokens.count(b"Q")
+    if total_q != total_Q:
+        unbalanced_gs_pages.append(page_num)
         findings.append(
             ForensicFinding(
-                code="STREAM_MULTIPLE_PAGE_CONTENTS",
+                code="STREAM_UNBALANCED_GRAPHICS_STATE",
                 category="content_stream",
                 severity="low",
-                confidence=0.20,
-                description=f"Page {page_num} uses multiple ({len(streams_bytes)}) content streams; often used for layered content, watermarks, or appended edits",
-                evidence={"page": page_num, "stream_count": len(streams_bytes)},
-                limitations=[
-                    "PDF generators commonly split headers, footers, watermarks, and background forms into separate streams.",
-                    "Not proof of unauthorized modification.",
-                ],
+                confidence=0.30,
+                description=f"Page {page_num} contains unbalanced graphics state push/pop operators across page streams (q={total_q}, Q={total_Q})",
+                evidence={"page": page_num, "q_count": total_q, "Q_count": total_Q},
+                limitations=["Malformed PDF generators can produce unbalanced graphics states without malice."],
             )
         )
 
@@ -237,27 +306,8 @@ def _inspect_page_streams(
     # Inspect operator tokens in streams
     tf_pattern = re.compile(rb"(/[\w\.\-]+)\s+([\d\.]+)\s+Tf")
     tr_pattern = re.compile(rb"(\d+)\s+Tr")
-    q_push_pattern = re.compile(rb"\bq\b")
-    q_pop_pattern = re.compile(rb"\bQ\b")
 
     for s_idx, s_bytes in enumerate(streams_bytes, start=1):
-        # 1. Unbalanced graphics state q/Q
-        q_count = len(q_push_pattern.findall(s_bytes))
-        q_pop_count = len(q_pop_pattern.findall(s_bytes))
-        if q_count != q_pop_count:
-            unbalanced_gs_pages.append(page_num)
-            findings.append(
-                ForensicFinding(
-                    code="STREAM_UNBALANCED_GRAPHICS_STATE",
-                    category="content_stream",
-                    severity="low",
-                    confidence=0.30,
-                    description=f"Page {page_num} stream {s_idx} contains unbalanced graphics state push/pop operators (q={q_count}, Q={q_pop_count})",
-                    evidence={"page": page_num, "stream_index": s_idx, "q_count": q_count, "Q_count": q_pop_count},
-                    limitations=["Malformed PDF generators can produce unbalanced graphics states without malice."],
-                )
-            )
-
         # 2. Invisible text rendering mode 3 Tr
         tr_matches = tr_pattern.findall(s_bytes)
         if b"3" in tr_matches:

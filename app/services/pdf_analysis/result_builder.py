@@ -350,6 +350,14 @@ def build_non_technical_summary(
     }
 
     # 1. Check: Content Alteration & Cover-Ups
+    has_exact_text_diff = (
+        "STRUCT_EXACT_TEXT_MODIFIED" in finding_codes
+        or "STRUCT_EXACT_TEXT_ADDED" in finding_codes
+        or "VERIFY_TEXT_DIFF_MODIFIED" in finding_codes
+        or "VERIFY_TEXT_DIFF_ADDED" in finding_codes
+    )
+    has_editor_placeholder = "STRUCT_EDITOR_PLACEHOLDER_TEXT" in finding_codes
+    has_foreign_font = "STRUCT_FOREIGN_FONT_TEXT_INSERTION" in finding_codes
     has_white_text = "STRUCT_WHITE_TEXT_LAYER_OVERLAY" in finding_codes or "VISUAL_WHITE_TEXT_LAYER_OVERLAY" in finding_codes
     has_whiteout_rect = "STRUCT_WHITEOUT_RECTANGLE_OVERLAY" in finding_codes or "VISUAL_WHITEOUT_PATCH_DETECTED" in finding_codes
     has_text_replacement = "STRUCT_POSSIBLE_TEXT_REPLACEMENT" in finding_codes or "REV_TEXT_CHANGE_DETECTED" in finding_codes
@@ -358,7 +366,28 @@ def build_non_technical_summary(
     has_text_overlap = "STRUCT_TEXT_OVERLAP" in finding_codes or "VISUAL_TEXT_COLLISION_OVERLAY" in finding_codes or "LAYOUT_TEXT_OVERLAP" in finding_codes
     has_text_insertion = "STRUCT_POSSIBLE_TEXT_INSERTION" in finding_codes
 
-    if has_white_text:
+    if has_exact_text_diff:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="warning",
+            headline="Confirmed Text Modification Against Reference",
+            detail="Direct text modifications and insertions were confirmed by comparing word-by-word against the reference copy.",
+        )
+    elif has_editor_placeholder:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="warning",
+            headline="Editor Placeholder Residue Detected",
+            detail="The document contains default placeholder text ('Type your text' / 'Insert text') left behind by a PDF editing tool.",
+        )
+    elif has_foreign_font:
+        check_content = NonTechnicalCheck(
+            name="Content & Text Cover-Ups",
+            status="warning",
+            headline="Injected Third-Party Font Detected",
+            detail="Portions of the document text use foreign system fallback fonts differing from the document's original font palette.",
+        )
+    elif has_white_text:
         check_content = NonTechnicalCheck(
             name="Content & Text Cover-Ups",
             status="warning",

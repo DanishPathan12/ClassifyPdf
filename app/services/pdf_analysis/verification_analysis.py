@@ -60,6 +60,7 @@ class PageDiffRecord:
     changed_pixel_count: int = 0
     diff_image_base64: str | None = None  # data:image/png;base64,...
     bounding_boxes: list[list[float]] = field(default_factory=list)
+    detailed_changes: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -180,7 +181,7 @@ def compare_against_trusted_original(
             status="unavailable",
             differences_detected=False,
             summary=f"Trusted original comparison unavailable: required libraries ({dep_str}) not installed in this runtime.",
-            limitations=limitations + [f"Original comparison requires {dep_str}."],
+            limitations=[f"Original comparison requires {dep_str}."],
         )
 
     orig_loaded = load_pdf(original_bytes, filename=original_filename)
@@ -250,18 +251,60 @@ def compare_against_trusted_original(
         page_orig = doc_orig[p_idx]
         page_cand = doc_cand[p_idx]
 
-        orig_words = [w[4] for w in page_orig.get_text("words")]
-        cand_words = [w[4] for w in page_cand.get_text("words")]
+        orig_words_meta = page_orig.get_text("words", sort=True)
+        cand_words_meta = page_cand.get_text("words", sort=True)
+        orig_words = [w[4] for w in orig_words_meta]
+        cand_words = [w[4] for w in cand_words_meta]
 
         sm = difflib.SequenceMatcher(None, orig_words, cand_words)
         added_words: list[str] = []
         removed_words: list[str] = []
+        detailed_changes: list[dict[str, Any]] = []
 
         for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            if tag in ("replace", "delete"):
-                removed_words.extend(orig_words[i1:i2])
-            if tag in ("replace", "insert"):
-                added_words.extend(cand_words[j1:j2])
+            if tag == "replace":
+                old_phrase = " ".join(orig_words[i1:i2])
+                new_phrase = " ".join(cand_words[j1:j2])
+                removed_words.append(old_phrase)
+                added_words.append(new_phrase)
+                matching_boxes = [cand_words_meta[k][:4] for k in range(j1, j2)]
+                c_bbox = [
+                    round(min(b[0] for b in matching_boxes), 1),
+                    round(min(b[1] for b in matching_boxes), 1),
+                    round(max(b[2] for b in matching_boxes), 1),
+                    round(max(b[3] for b in matching_boxes), 1),
+                ] if matching_boxes else None
+                detailed_changes.append({
+                    "type": "replace",
+                    "old_text": old_phrase,
+                    "new_text": new_phrase,
+                    "bbox": c_bbox,
+                })
+            elif tag == "insert":
+                new_phrase = " ".join(cand_words[j1:j2])
+                added_words.append(new_phrase)
+                matching_boxes = [cand_words_meta[k][:4] for k in range(j1, j2)]
+                c_bbox = [
+                    round(min(b[0] for b in matching_boxes), 1),
+                    round(min(b[1] for b in matching_boxes), 1),
+                    round(max(b[2] for b in matching_boxes), 1),
+                    round(max(b[3] for b in matching_boxes), 1),
+                ] if matching_boxes else None
+                detailed_changes.append({
+                    "type": "insert",
+                    "old_text": "",
+                    "new_text": new_phrase,
+                    "bbox": c_bbox,
+                })
+            elif tag == "delete":
+                old_phrase = " ".join(orig_words[i1:i2])
+                removed_words.append(old_phrase)
+                detailed_changes.append({
+                    "type": "delete",
+                    "old_text": old_phrase,
+                    "new_text": "",
+                    "bbox": None,
+                })
 
         # Visual pixel diff at render_dpi
         pix_orig = page_orig.get_pixmap(dpi=render_dpi, alpha=False)
@@ -321,11 +364,12 @@ def compare_against_trusted_original(
             PageDiffRecord(
                 page_number=p_num,
                 status=p_status,
-                added_text=added_words[:15],
-                removed_text=removed_words[:15],
+                added_text=added_words,
+                removed_text=removed_words,
                 changed_pixel_count=changed_px,
                 diff_image_base64=diff_b64,
                 bounding_boxes=diff_bboxes[:10],
+                detailed_changes=detailed_changes,
             )
         )
 
@@ -404,6 +448,54 @@ def analyze_verification_layer(
                 limitations=orig_comp.limitations,
             )
         )
+        for pd in orig_comp.page_diffs:
+            if pd.status in ("modified", "added") and hasattr(pd, "detailed_changes"):
+                for chg in pd.detailed_changes:
+                    if chg.get("type") == "replace":
+                        findings.append(
+                            ForensicFinding(
+                                code="VERIFY_TEXT_DIFF_MODIFIED",
+                                category="confirmed",
+                                domain="digital_signatures",
+                                severity="high",
+                                confidence=0.98,
+                                anomaly_confidence=0.98,
+                                tampering_confidence=0.95,
+                                description=(
+                                    f"Page {pd.page_number} text modified compared to reference original: "
+                                    f"'{chg['old_text']}' replaced with '{chg['new_text']}'."
+                                ),
+                                evidence={
+                                    "page": pd.page_number,
+                                    "old_text": chg["old_text"],
+                                    "new_text": chg["new_text"],
+                                    "bbox": chg.get("bbox"),
+                                },
+                                limitations=orig_comp.limitations,
+                            )
+                        )
+                    elif chg.get("type") == "insert":
+                        findings.append(
+                            ForensicFinding(
+                                code="VERIFY_TEXT_DIFF_ADDED",
+                                category="confirmed",
+                                domain="digital_signatures",
+                                severity="high",
+                                confidence=0.98,
+                                anomaly_confidence=0.98,
+                                tampering_confidence=0.95,
+                                description=(
+                                    f"Page {pd.page_number} text inserted compared to reference original: "
+                                    f"'{chg['new_text']}'."
+                                ),
+                                evidence={
+                                    "page": pd.page_number,
+                                    "added_text": chg["new_text"],
+                                    "bbox": chg.get("bbox"),
+                                },
+                                limitations=orig_comp.limitations,
+                            )
+                        )
     limitations.extend([l for l in orig_comp.limitations if l not in limitations])
 
     # 3. Hash Verification

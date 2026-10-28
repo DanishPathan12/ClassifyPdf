@@ -392,3 +392,49 @@ def test_case_12_legitimate_annotations_acknowledged() -> None:
         if "ANNOT" in f.code:
             assert len(f.alternative_explanations) >= 1 or len(f.limitations) >= 1
             assert f.tampering_confidence <= 0.70
+
+
+def test_case_13_editor_placeholder_text_detected() -> None:
+    """Case 13: Editor placeholder text ('Type your text') is flagged with high confidence."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    for y in range(100, 300, 30):
+        page.insert_text(fitz.Point(72, y), f"Quarterly operational report line item {y}", fontname="helv", fontsize=10)
+    page.insert_text(fitz.Point(200, 450), "Type your text", fontname="helv", fontsize=12)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    res = run_pdf_analysis(pdf_bytes, filename="placeholder.pdf")
+    codes = {f.code for f in res.findings}
+    assert "STRUCT_EDITOR_PLACEHOLDER_TEXT" in codes
+    ph_finding = next(f for f in res.findings if f.code == "STRUCT_EDITOR_PLACEHOLDER_TEXT")
+    assert ph_finding.severity == "high"
+    assert ph_finding.confidence >= 0.80
+    assert "Type your text" in str(ph_finding.evidence)
+    assert res.verdict == "likely_edited"
+    assert res.edit_detected is True
+
+
+def test_case_14_exact_text_diff_detected() -> None:
+    """Case 14: Comparing modified PDF against trusted original identifies exact altered and added words."""
+    doc_orig = fitz.open()
+    page_orig = doc_orig.new_page(width=612, height=792)
+    page_orig.insert_text(fitz.Point(72, 100), "The contract total is USD 5,000 payable in Poland.", fontname="helv", fontsize=11)
+    orig_bytes = doc_orig.tobytes()
+    doc_orig.close()
+
+    doc_mod = fitz.open()
+    page_mod = doc_mod.new_page(width=612, height=792)
+    page_mod.insert_text(fitz.Point(72, 100), "The contract total is USD 95,000 payable in Poland.", fontname="helv", fontsize=11)
+    page_mod.insert_text(fitz.Point(72, 200), "Type your text", fontname="helv", fontsize=11)
+    mod_bytes = doc_mod.tobytes()
+    doc_mod.close()
+
+    res = run_pdf_analysis(mod_bytes, filename="tampered.pdf", original_source=orig_bytes, original_filename="original.pdf")
+    codes = {f.code for f in res.findings}
+    assert "STRUCT_EXACT_TEXT_MODIFIED" in codes or "VERIFY_TEXT_DIFF_MODIFIED" in codes
+    assert "STRUCT_EXACT_TEXT_ADDED" in codes or "VERIFY_TEXT_DIFF_ADDED" in codes
+    assert res.verdict == "likely_edited"
+    assert res.edit_detected is True
+    assert res.confidence == 1.0
+

@@ -1,14 +1,18 @@
 """Layer 1: PDF Structural Analysis.
 
 Inspects text spans, fonts, bounding boxes, opaque/whiteout vector rectangles,
-embedded image objects, annotations, form widgets, and cross-reference revision structure.
+embedded image objects, annotations, form widgets, cross-reference revision structure,
+injected third-party fonts, editor placeholder residue, and exact text modifications.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import difflib
 import io
 import logging
+from pathlib import Path
+import re
 from typing import Any
 
 try:
@@ -27,6 +31,17 @@ from app.services.pdf_analysis.revision_forensics import analyze_revision_struct
 from app.services.pdf_analysis.structural_forensics import analyze_structural_forensics
 
 logger = logging.getLogger("pdf_analyser.structural_analysis")
+
+EDITOR_PLACEHOLDER_REGEX = re.compile(
+    r"^(type\s+your\s+text|insert\s+text(\s+here)?|click\s+(here\s+)?to\s+(add|edit|type)\s+text|"
+    r"add\s+text(\s+here)?|enter\s+text(\s+here)?|your\s+text\s+here|sample\s+text|"
+    r"double\s+click\s+to\s+edit|text\s+box|placeholder(\s+text)?|lorem\s+ipsum)",
+    re.IGNORECASE,
+)
+
+GENERIC_FALLBACK_FONTS = frozenset({
+    "liberationsans", "arial", "helvetica", "calibri",
+})
 
 
 @dataclass
@@ -132,7 +147,38 @@ def _rect_contains(outer: list[float], inner: list[float], margin: float = 2.0) 
     )
 
 
-def analyze_structural_layer(loaded_pdf: LoadedPdf) -> StructuralLayerResult:
+def _normalize_font_family(font_name: str) -> str:
+    """Extract standard base font family name from subset or internal font tag."""
+    cleaned = font_name.split("+")[-1].split("-")[0].split("_")[0].lower()
+    for fam in ("montserrat", "lato", "helvetica", "liberationsans", "arial", "times", "courier", "calibri", "verdana", "georgia", "roboto", "opensans"):
+        if fam in cleaned:
+            return fam
+    return cleaned
+
+
+def _is_subheading_or_label(sp: TextSpanRecord) -> bool:
+    """Check if a text span is a section subheading, label, or header rather than tabular data."""
+    txt = sp.text.strip()
+    if not txt:
+        return False
+    # Ends with colon, e.g. "New capital:", "Sales:", "NAB:", "New owners:"
+    if txt.endswith(":"):
+        return True
+    # Explicit bold flag (PyMuPDF bit 4 = 16) or bold in font name
+    is_bold = bool(sp.flags & 16) or any(w in sp.font_name.lower() for w in ("bold", "700", "800", "900", "black", "semibold"))
+    # Short bold phrase (like a section header)
+    if is_bold and len(txt.split()) <= 5:
+        return True
+    # Larger heading font size
+    if sp.font_size >= 13.5:
+        return True
+    return False
+
+
+def analyze_structural_layer(
+    loaded_pdf: LoadedPdf,
+    original_source: bytes | Path | None = None,
+) -> StructuralLayerResult:
     """Execute complete Layer 1 structural analysis on the provided PDF."""
     if not loaded_pdf.is_valid:
         return StructuralLayerResult(
@@ -198,550 +244,820 @@ def analyze_structural_layer(loaded_pdf: LoadedPdf) -> StructuralLayerResult:
         )
 
     try:
+        # Pre-pass: Document-wide font family distribution to determine the genuine primary palette
+        doc_font_fam_counts: dict[str, int] = {}
+        heading_font_families: set[str] = set()
+        for p_idx in range(len(doc)):
+            try:
+                p_dict = doc[p_idx].get_text("dict")
+                for b in p_dict.get("blocks", []):
+                    if b.get("type") == 0:
+                        for l in b.get("lines", []):
+                            for s in l.get("spans", []):
+                                t = s.get("text", "").strip()
+                                if t:
+                                    fam = _normalize_font_family(s.get("font", ""))
+                                    doc_font_fam_counts[fam] = doc_font_fam_counts.get(fam, 0) + len(t.split())
+                                    if s.get("size", 10.0) >= 13.5:
+                                        heading_font_families.add(fam)
+            except Exception:
+                pass
+
+        total_doc_words = sum(doc_font_fam_counts.values())
+        primary_font_families: set[str] = set()
+        if total_doc_words > 0:
+            primary_font_families = {
+                f for f, cnt in doc_font_fam_counts.items()
+                if (cnt / total_doc_words) >= 0.15
+            }
+        primary_font_families.update(heading_font_families)
+
+        # Page-level inspection loop with failure isolation per page
         for page_idx in range(len(doc)):
             page_num = page_idx + 1
-            page = doc[page_idx]
+            try:
+                page = doc[page_idx]
 
-            # 1. Annotations & Highlight Extraction
-            page_annots: list[AnnotationRecord] = []
-            highlight_rects: list[list[float]] = []
-            for annot in page.annots():
-                rect = annot.rect
-                info = annot.info
-                t_name = str(annot.type[1]) if isinstance(annot.type, (list, tuple)) else str(annot.type)
-                annot_rect = [float(round(c, 2)) for c in [rect.x0, rect.y0, rect.x1, rect.y1]]
-                is_hl = (t_name.lower() == "highlight") or (getattr(annot, "type", None) == 8)
-                if is_hl:
-                    highlight_rects.append(annot_rect)
+                # 1. Annotations & Highlight Extraction
+                page_annots: list[AnnotationRecord] = []
+                highlight_rects: list[list[float]] = []
+                for annot in page.annots():
+                    rect = annot.rect
+                    info = annot.info
+                    t_name = str(annot.type[1]) if isinstance(annot.type, (list, tuple)) else str(annot.type)
+                    annot_rect = [float(round(c, 2)) for c in [rect.x0, rect.y0, rect.x1, rect.y1]]
+                    is_hl = (t_name.lower() == "highlight") or (getattr(annot, "type", None) == 8)
+                    if is_hl:
+                        highlight_rects.append(annot_rect)
 
-                rec_annot = AnnotationRecord(
-                    page=page_num,
-                    type_name=t_name,
-                    rect=annot_rect,
-                    flags=annot.flags,
-                    field_name=info.get("title") or info.get("content"),
-                    is_highlight=is_hl,
-                )
-                page_annots.append(rec_annot)
-                all_annots.append(rec_annot)
-
-            for widget in page.widgets():
-                rect = widget.rect
-                widget_rect = [float(round(c, 2)) for c in [rect.x0, rect.y0, rect.x1, rect.y1]]
-                all_annots.append(
-                    AnnotationRecord(
+                    rec_annot = AnnotationRecord(
                         page=page_num,
-                        type_name="Widget",
-                        rect=widget_rect,
-                        flags=0,
-                        field_name=widget.field_name,
+                        type_name=t_name,
+                        rect=annot_rect,
+                        flags=annot.flags,
+                        field_name=info.get("title") or info.get("content"),
+                        is_highlight=is_hl,
                     )
-                )
+                    page_annots.append(rec_annot)
+                    all_annots.append(rec_annot)
 
-            # 2. Extract Vector Drawings & Detect Containers / Table Outlines
-            drawings = page.get_drawings()
-            table_or_framed_rects: list[list[float]] = []
-            page_whiteouts: list[WhiteoutPatchRecord] = []
-            opaque_shapes: list[dict[str, Any]] = []
-
-            for draw in drawings:
-                r = draw.get("rect")
-                if r and (r.width > 20 or r.height > 20):
-                    table_or_framed_rects.append([r.x0, r.y0, r.x1, r.y1])
-
-                fill = draw.get("fill")
-                if fill is not None and r:
-                    is_white = False
-                    if len(fill) >= 3 and fill[0] >= 0.95 and fill[1] >= 0.95 and fill[2] >= 0.95:
-                        is_white = True
-                    elif len(fill) == 1 and fill[0] >= 0.95:
-                        is_white = True
-
-                    rect_coords = [float(round(c, 2)) for c in [r.x0, r.y0, r.x1, r.y1]]
-                    opaque_shapes.append({
-                        "rect": rect_coords,
-                        "fill": fill,
-                        "is_white": is_white,
-                        "width": r.width,
-                        "height": r.height,
-                    })
-
-            # 3. Extract Text Spans with Rich Metadata
-            page_spans: list[TextSpanRecord] = []
-            page_dict = page.get_text("dict")
-            for b_idx, block in enumerate(page_dict.get("blocks", [])):
-                if block.get("type") == 0:  # Text block
-                    for l_idx, line in enumerate(block.get("lines", [])):
-                        l_bbox = [float(round(c, 2)) for c in line.get("bbox", [0, 0, 0, 0])]
-                        for span in line.get("spans", []):
-                            txt = span.get("text", "").strip()
-                            if not txt:
-                                continue
-                            raw_color = span.get("color", 0)
-                            color_rgb = (
-                                (raw_color >> 16) & 255,
-                                (raw_color >> 8) & 255,
-                                raw_color & 255,
-                            )
-                            s_bbox = [float(round(c, 2)) for c in span.get("bbox", [0, 0, 0, 0])]
-                            is_hl = any(_boxes_overlap(s_bbox, hr, min_overlap_ratio=0.20) for hr in highlight_rects)
-                            is_tbl = any(
-                                abs(s_bbox[0] - tr[0]) < 6 or abs(s_bbox[1] - tr[1]) < 6 or abs(s_bbox[2] - tr[2]) < 6 or abs(s_bbox[3] - tr[3]) < 6
-                                for tr in table_or_framed_rects
-                            )
-
-                            rec = TextSpanRecord(
-                                page=page_num,
-                                text=txt,
-                                bbox=s_bbox,
-                                font_name=span.get("font", "unknown"),
-                                font_size=float(round(span.get("size", 10.0), 2)),
-                                color_rgb=color_rgb,
-                                flags=span.get("flags", 0),
-                                line_bbox=l_bbox,
-                                block_idx=b_idx,
-                                line_idx=l_idx,
-                                is_in_table=is_tbl,
-                                is_highlighted=is_hl,
-                            )
-                            page_spans.append(rec)
-                            all_spans.append(rec)
-
-            white_spans = [
-                sp for sp in page_spans
-                if (sp.color_rgb[0] >= 235 and sp.color_rgb[1] >= 235 and sp.color_rgb[2] >= 235)
-            ]
-            visible_spans = [
-                sp for sp in page_spans
-                if not (sp.color_rgb[0] >= 235 and sp.color_rgb[1] >= 235 and sp.color_rgb[2] >= 235)
-            ]
-
-            # 4. Check A: Text Replacement & Whiteout Covering
-            for shape in opaque_shapes:
-                if not shape["is_white"]:
-                    continue
-                w = shape["width"]
-                h = shape["height"]
-                r_coords = shape["rect"]
-
-                # Exclude canvas background, whole page containers, microscopic dots
-                if w >= 0.88 * page.rect.width and h >= 0.75 * page.rect.height:
-                    continue
-                if h > 60 and (w > 280 or h > 120):
-                    continue
-                if w < 12 or h < 6:
-                    continue
-
-                overlying = [
-                    sp for sp in visible_spans
-                    if _rect_contains(r_coords, sp.bbox, margin=4.0) or _boxes_overlap(r_coords, sp.bbox, min_overlap_ratio=0.15)
-                ]
-
-                # Filter out table row bands spanning entire width
-                if w > 360 and len(overlying) >= 4:
-                    overlying = []
-
-                has_over = bool(overlying)
-                sample_texts = [sp.text for sp in overlying[:3]]
-                patch_rec = WhiteoutPatchRecord(
-                    page=page_num,
-                    rect=r_coords,
-                    fill_color=tuple(float(round(c, 2)) for c in shape["fill"]),
-                    has_overlying_text=has_over,
-                    overlying_text=" ".join(sample_texts),
-                )
-                page_whiteouts.append(patch_rec)
-                all_whiteout_patches.append(patch_rec)
-
-                if has_over:
-                    findings.append(
-                        ForensicFinding(
-                            code="STRUCT_WHITEOUT_RECTANGLE_OVERLAY",
-                            category="possible_text_replacement",
-                            domain="content_stream",
-                            severity="medium",
-                            confidence=0.75,
-                            anomaly_confidence=0.90,
-                            tampering_confidence=0.70,
-                            description=(
-                                f"Page {page_num} contains an opaque whiteout vector rectangle at {r_coords} "
-                                f"directly covered by replacement text ('{', '.join(sample_texts[:2])}'). "
-                                "This pattern is characteristic of online PDF editors used to redact or alter figures."
-                            ),
-                            evidence={
-                                "page": page_num,
-                                "rect": r_coords,
-                                "overlaid_text": sample_texts,
-                                "sample_overlaid_text": ", ".join(sample_texts)[:200],
-                            },
-                            alternative_explanations=[
-                                "Legitimate form field or intentional white card container in document design.",
-                                "Authorized redaction with new replacement figure.",
-                            ],
-                            recommended_action="Inspect the highlighted region to verify whether original figures were altered.",
+                for widget in page.widgets():
+                    rect = widget.rect
+                    widget_rect = [float(round(c, 2)) for c in [rect.x0, rect.y0, rect.x1, rect.y1]]
+                    all_annots.append(
+                        AnnotationRecord(
+                            page=page_num,
+                            type_name="Widget",
+                            rect=widget_rect,
+                            flags=0,
+                            field_name=widget.field_name,
                         )
                     )
 
-            # 5. Check B: White Text Masking Layer
-            white_text_overlays: list[tuple[TextSpanRecord, TextSpanRecord]] = []
-            for wsp in white_spans:
-                for vsp in visible_spans:
-                    if _boxes_overlap(wsp.bbox, vsp.bbox, min_overlap_ratio=0.12):
-                        white_text_overlays.append((wsp, vsp))
+                # 2. Extract Vector Drawings & Detect Containers / Table Outlines
+                drawings = page.get_drawings()
+                table_or_framed_rects: list[list[float]] = []
+                page_whiteouts: list[WhiteoutPatchRecord] = []
+                opaque_shapes: list[dict[str, Any]] = []
 
-            if white_text_overlays:
-                sample_w, sample_v = white_text_overlays[0]
-                findings.append(
-                    ForensicFinding(
-                        code="STRUCT_WHITE_TEXT_LAYER_OVERLAY",
-                        category="possible_text_replacement",
-                        domain="content_stream",
-                        severity="high",
-                        confidence=0.85,
-                        anomaly_confidence=0.95,
-                        tampering_confidence=0.85,
-                        description=(
-                            f"Page {page_num} contains a white text masking layer ('{sample_w.text}') directly colliding with "
-                            f"visible text ('{sample_v.text}'). This technique is employed in document forgery to visually wipe out "
-                            "original headings or numbers while superimposing altered text without rasterization."
-                        ),
-                        evidence={
-                            "page": page_num,
-                            "white_layer_text": sample_w.text,
-                            "visible_text": sample_v.text,
-                            "white_layer_bbox": sample_w.bbox,
-                            "visible_bbox": sample_v.bbox,
-                            "overlay_count": len(white_text_overlays),
-                        },
-                        alternative_explanations=[
-                            "Reverse-contrast typography (white text on dark vector background).",
-                        ],
-                        recommended_action="Verify surrounding background color and check if original text was hidden.",
-                    )
-                )
-            elif white_spans:
-                sample_w = white_spans[0]
-                findings.append(
-                    ForensicFinding(
-                        code="STRUCT_INVISIBLE_WHITE_TEXT",
-                        category="suspicious",
-                        domain="content_stream",
-                        severity="medium",
-                        confidence=0.55,
-                        anomaly_confidence=0.85,
-                        tampering_confidence=0.45,
-                        description=(
-                            f"Page {page_num} contains {len(white_spans)} invisible white text span(s) ('{sample_w.text}'). "
-                            "White text on white background is invisible to readers and may indicate hidden redaction remnants or search-indexing padding."
-                        ),
-                        evidence={
-                            "page": page_num,
-                            "sample_text": sample_w.text,
-                            "bbox": sample_w.bbox,
-                            "white_span_count": len(white_spans),
-                        },
-                        alternative_explanations=[
-                            "Search indexing, accessibility padding, or dark background styling.",
-                        ],
-                        recommended_action="Inspect whether the text is visible to readers or hidden in the background.",
-                    )
-                )
+                for draw in drawings:
+                    r = draw.get("rect")
+                    if r and (r.width > 20 or r.height > 20):
+                        table_or_framed_rects.append([r.x0, r.y0, r.x1, r.y1])
 
-            # 6. Check C: Opaque Covering Objects & Non-White Intersections
-            for shape in opaque_shapes:
-                if shape["is_white"]:
-                    continue  # Handled above
-                r_coords = shape["rect"]
-                # Exclude full page banners or giant cards
-                if shape["width"] >= 0.88 * page.rect.width and shape["height"] >= 0.75 * page.rect.height:
-                    continue
-                if shape["width"] < 12 or shape["height"] < 6:
-                    continue
+                    fill = draw.get("fill")
+                    if fill is not None and r:
+                        is_white = False
+                        if len(fill) >= 3 and fill[0] >= 0.95 and fill[1] >= 0.95 and fill[2] >= 0.95:
+                            is_white = True
+                        elif len(fill) == 1 and fill[0] >= 0.95:
+                            is_white = True
 
-                # Check if this opaque shape intersects text
-                intersecting = [
+                        rect_coords = [float(round(c, 2)) for c in [r.x0, r.y0, r.x1, r.y1]]
+                        opaque_shapes.append({
+                            "rect": rect_coords,
+                            "fill": fill,
+                            "is_white": is_white,
+                            "width": r.width,
+                            "height": r.height,
+                        })
+
+                # 3. Extract Text Spans with Rich Metadata
+                page_spans: list[TextSpanRecord] = []
+                page_dict = page.get_text("dict")
+                for b_idx, block in enumerate(page_dict.get("blocks", [])):
+                    if block.get("type") == 0:  # Text block
+                        for l_idx, line in enumerate(block.get("lines", [])):
+                            l_bbox = [float(round(c, 2)) for c in line.get("bbox", [0, 0, 0, 0])]
+                            for span in line.get("spans", []):
+                                txt = span.get("text", "").strip()
+                                if not txt:
+                                    continue
+                                raw_color = span.get("color", 0)
+                                color_rgb = (
+                                    (raw_color >> 16) & 255,
+                                    (raw_color >> 8) & 255,
+                                    raw_color & 255,
+                                )
+                                s_bbox = [float(round(c, 2)) for c in span.get("bbox", [0, 0, 0, 0])]
+                                is_hl = any(_boxes_overlap(s_bbox, hr, min_overlap_ratio=0.20) for hr in highlight_rects)
+                                is_tbl = any(
+                                    abs(s_bbox[0] - tr[0]) < 6 or abs(s_bbox[1] - tr[1]) < 6 or abs(s_bbox[2] - tr[2]) < 6 or abs(s_bbox[3] - tr[3]) < 6
+                                    for tr in table_or_framed_rects
+                                )
+
+                                rec = TextSpanRecord(
+                                    page=page_num,
+                                    text=txt,
+                                    bbox=s_bbox,
+                                    font_name=span.get("font", "unknown"),
+                                    font_size=float(round(span.get("size", 10.0), 2)),
+                                    color_rgb=color_rgb,
+                                    flags=span.get("flags", 0),
+                                    line_bbox=l_bbox,
+                                    block_idx=b_idx,
+                                    line_idx=l_idx,
+                                    is_in_table=is_tbl,
+                                    is_highlighted=is_hl,
+                                )
+                                page_spans.append(rec)
+                                all_spans.append(rec)
+
+                white_spans = [
                     sp for sp in page_spans
-                    if not sp.is_highlighted and _boxes_overlap(r_coords, sp.bbox, min_overlap_ratio=0.30)
+                    if (sp.color_rgb[0] >= 235 and sp.color_rgb[1] >= 235 and sp.color_rgb[2] >= 235)
                 ]
-                # If dark or colored shape contains readable text, it is typically a header, callout, or badge
-                # Only flag if it appears to obscure underlying content unexpectedly
-                if 1 <= len(intersecting) <= 3 and shape["width"] <= 250 and shape["height"] <= 45:
-                    findings.append(
-                        ForensicFinding(
-                            code="STRUCT_POSSIBLE_COVERING_OBJECT",
-                            category="possible_covering_object",
-                            domain="content_stream",
-                            severity="medium",
-                            confidence=0.60,
-                            anomaly_confidence=0.85,
-                            tampering_confidence=0.50,
-                            description=(
-                                f"Page {page_num} contains an opaque graphical object at {r_coords} "
-                                f"intersecting text ('{', '.join(s.text for s in intersecting)}'). "
-                                "This pattern can indicate a redaction patch or obscured content."
-                            ),
-                            evidence={
-                                "page": page_num,
-                                "rect": r_coords,
-                                "intersecting_text": [s.text for s in intersecting],
-                            },
-                            alternative_explanations=[
-                                "Designed callout badge, colored button, or intentional banner background.",
-                            ],
-                            recommended_action="Inspect whether text inside the object is legibly styled or obscured.",
-                        )
-                    )
+                visible_spans = [
+                    sp for sp in page_spans
+                    if not (sp.color_rgb[0] >= 235 and sp.color_rgb[1] >= 235 and sp.color_rgb[2] >= 235)
+                ]
 
-            # 7. Check D: Context-Aware Formatting Consistency & Potentially Inserted Text
-            # Compare text within contextual groups (e.g. column alignment, continuous line flow)
-            if len(visible_spans) >= 5:
-                # Group spans by approximate X-column position (+- 10 pt) for table column comparison
-                col_groups: dict[int, list[TextSpanRecord]] = {}
-                for sp in visible_spans:
-                    # Ignore intentional headings (size >= 14 or line at top of page)
-                    if sp.font_size >= 14.0 or sp.is_highlighted:
+                # 4. Check A: Text Replacement & Whiteout Covering
+                for shape in opaque_shapes:
+                    if not shape["is_white"]:
                         continue
-                    col_key = int(sp.bbox[0] / 15.0) * 15
-                    col_groups.setdefault(col_key, []).append(sp)
+                    w = shape["width"]
+                    h = shape["height"]
+                    r_coords = shape["rect"]
 
-                for col_key, group in col_groups.items():
-                    if len(group) >= 4:
-                        font_hist: dict[str, int] = {}
-                        for s in group:
-                            font_hist[s.font_name] = font_hist.get(s.font_name, 0) + 1
-                        dom_font = max(font_hist, key=font_hist.get)
-                        if font_hist[dom_font] >= len(group) - 1 and len(font_hist) > 1:
-                            # An isolated item in an otherwise uniform column has an abrupt font switch
-                            outliers = [s for s in group if s.font_name != dom_font and not s.is_highlighted and not (s.flags & 2)]
-                            if outliers:
-                                out_sp = outliers[0]
-                                findings.append(
-                                    ForensicFinding(
-                                        code="STRUCT_FORMATTING_ANOMALY",
-                                        category="formatting_anomaly",
-                                        domain="layout_analysis",
-                                        severity="low",
-                                        confidence=0.40,
-                                        anomaly_confidence=0.85,
-                                        tampering_confidence=0.35,
-                                        description=(
-                                            f"Page {page_num} contains an isolated value '{out_sp.text}' using font "
-                                            f"'{out_sp.font_name}' in a column where all other items use '{dom_font}'. "
-                                            "Isolated font differences in tabular columns can indicate pasted or edited values."
-                                        ),
-                                        evidence={
-                                            "page": page_num,
-                                            "text": out_sp.text,
-                                            "font": out_sp.font_name,
-                                            "expected_font": dom_font,
-                                            "bbox": out_sp.bbox,
-                                        },
-                                        alternative_explanations=[
-                                            "Intentional emphasis, font substitution, or template design variation.",
-                                        ],
-                                        recommended_action="Verify if the figure matches the surrounding data context.",
-                                    )
-                                )
+                    # Exclude canvas background, whole page containers, microscopic dots
+                    if w >= 0.88 * page.rect.width and h >= 0.75 * page.rect.height:
+                        continue
+                    if h > 60 and (w > 280 or h > 120):
+                        continue
+                    if w < 12 or h < 6:
+                        continue
 
-                # General page dominant font check for body paragraphs
-                font_counts: dict[str, int] = {}
-                for sp in visible_spans:
-                    if not sp.is_highlighted and sp.font_size <= 14.0:
-                        font_counts[sp.font_name] = font_counts.get(sp.font_name, 0) + len(sp.text.split())
-                total_words = sum(font_counts.values())
-                if total_words > 10:
-                    dominant_font = max(font_counts, key=font_counts.get)
-                    dominant_share = font_counts[dominant_font] / total_words
-                    if dominant_share >= 0.85:
-                        isolated_spans = [
-                            sp for sp in visible_spans
-                            if sp.font_name != dominant_font
-                            and len(sp.text.split()) <= 6
-                            and font_counts[sp.font_name] <= 6
-                            and not sp.is_highlighted
-                            and sp.font_size <= 14.0  # Not a large heading
-                            and not any(f.evidence.get("text") == sp.text for f in findings if f.code == "STRUCT_FORMATTING_ANOMALY")
-                        ]
-                        if isolated_spans:
-                            sample = isolated_spans[0]
-                            findings.append(
-                                ForensicFinding(
-                                    code="STRUCT_INCONSISTENT_FONT_SWITCH",
-                                    category="formatting_anomaly",
-                                    domain="layout_analysis",
-                                    severity="low",
-                                    confidence=0.35,
-                                    anomaly_confidence=0.80,
-                                    tampering_confidence=0.30,
-                                    description=(
-                                        f"Page {page_num} has an isolated text segment '{sample.text}' using font "
-                                        f"'{sample.font_name}' in a page where {int(dominant_share * 100)}% of body text uses '{dominant_font}'."
-                                    ),
-                                    evidence={
-                                        "page": page_num,
-                                        "isolated_text": sample.text,
-                                        "isolated_font": sample.font_name,
-                                        "dominant_font": dominant_font,
-                                        "bbox": sample.bbox,
-                                    },
-                                    alternative_explanations=[
-                                        "Intentional stylistic emphasis, footer/header markup, or brand naming.",
-                                    ],
-                                    recommended_action="Inspect the text in document context.",
-                                )
-                            )
+                    overlying = [
+                        sp for sp in visible_spans
+                        if _rect_contains(r_coords, sp.bbox, margin=4.0) or _boxes_overlap(r_coords, sp.bbox, min_overlap_ratio=0.15)
+                    ]
 
-            # 8. Check E: Text-to-Text Overlaps
-            overlaps_found = 0
-            for i in range(len(page_spans)):
-                for j in range(i + 1, len(page_spans)):
-                    s1 = page_spans[i]
-                    s2 = page_spans[j]
-                    if s1.text != s2.text and _boxes_overlap(s1.bbox, s2.bbox, min_overlap_ratio=0.30):
-                        # Verify not ligature / sub-superscript
-                        ix0 = max(s1.bbox[0], s2.bbox[0])
-                        iy0 = max(s1.bbox[1], s2.bbox[1])
-                        ix1 = min(s1.bbox[2], s2.bbox[2])
-                        iy1 = min(s1.bbox[3], s2.bbox[3])
-                        area_overlap = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
-                        area_s1 = max(1.0, (s1.bbox[2] - s1.bbox[0]) * (s1.bbox[3] - s1.bbox[1]))
-                        if (area_overlap / area_s1) > 0.40:
-                            overlaps_found += 1
-                            if overlaps_found == 1:
-                                findings.append(
-                                    ForensicFinding(
-                                        code="STRUCT_TEXT_OVERLAP",
-                                        category="text_overlap",
-                                        domain="layout_analysis",
-                                        severity="medium",
-                                        confidence=0.60,
-                                        anomaly_confidence=0.90,
-                                        tampering_confidence=0.55,
-                                        description=(
-                                            f"Page {page_num} contains conflicting overlapping text strings: "
-                                            f"'{s1.text}' overlaps with '{s2.text}'."
-                                        ),
-                                        evidence={
-                                            "page": page_num,
-                                            "string1": s1.text,
-                                            "string2": s2.text,
-                                            "bbox1": s1.bbox,
-                                            "bbox2": s2.bbox,
-                                        },
-                                        alternative_explanations=[
-                                            "Complex vector graphics, watermarks, or typography kerning effects.",
-                                        ],
-                                        recommended_action="Inspect whether the text collision was caused by superimposed edits.",
-                                    )
-                                )
+                    # Filter out table row bands spanning entire width
+                    if w > 360 and len(overlying) >= 4:
+                        overlying = []
 
-            # 9. Check F: Embedded Images Inspection & Text-over-Image
-            page_images = page.get_images(full=True)
-            for img_info in page_images:
-                xref = img_info[0]
-                w = img_info[2]
-                h = img_info[3]
-                cs = str(img_info[5])
-                img_rects = page.get_image_rects(xref)
-                img_bbox = None
-                if img_rects:
-                    r = img_rects[0]
-                    img_bbox = [float(round(c, 2)) for c in [r.x0, r.y0, r.x1, r.y1]]
+                    has_over = bool(overlying)
+                    sample_texts = [sp.text for sp in overlying[:3]]
+                    patch_rec = WhiteoutPatchRecord(
+                        page=page_num,
+                        rect=r_coords,
+                        fill_color=tuple(float(round(c, 2)) for c in shape["fill"]),
+                        has_overlying_text=has_over,
+                        overlying_text=" ".join(sample_texts),
+                    )
+                    page_whiteouts.append(patch_rec)
+                    all_whiteout_patches.append(patch_rec)
 
-                img_rec = ImageRecord(
-                    page=page_num,
-                    xref=xref,
-                    width=w,
-                    height=h,
-                    bbox=img_bbox,
-                    colorspace=cs,
-                )
-                all_images.append(img_rec)
-
-                # Check if sparse digital text is overlaid over a large scanned bitmap image
-                if img_bbox and (img_bbox[2] - img_bbox[0] > 150) and (img_bbox[3] - img_bbox[1] > 150):
-                    overlying_text_words: list[str] = []
-                    for sp in page_spans:
-                        if not sp.is_highlighted and _rect_contains(img_bbox, sp.bbox, margin=0.0):
-                            overlying_text_words.extend(sp.text.split())
-
-                    if 1 <= len(overlying_text_words) <= 8:
+                    if has_over:
                         findings.append(
                             ForensicFinding(
-                                code="STRUCT_TEXT_OVER_IMAGE",
-                                category="possible_text_insertion",
-                                domain="layout_analysis",
+                                code="STRUCT_WHITEOUT_RECTANGLE_OVERLAY",
+                                category="possible_text_replacement",
+                                domain="content_stream",
                                 severity="medium",
-                                confidence=0.50,
-                                anomaly_confidence=0.85,
-                                tampering_confidence=0.50,
+                                confidence=0.75,
+                                anomaly_confidence=0.90,
+                                tampering_confidence=0.70,
                                 description=(
-                                    f"Page {page_num} contains sparse digital text ({len(overlying_text_words)} words: "
-                                    f"'{' '.join(overlying_text_words)}') directly overlying an embedded bitmap image. "
-                                    "This pattern occurs when numerical figures or names are typed over scanned receipts or letters."
+                                    f"Page {page_num} contains an opaque whiteout vector rectangle at {r_coords} "
+                                    f"directly covered by replacement text ('{', '.join(sample_texts[:2])}'). "
+                                    "This pattern is characteristic of online PDF editors used to redact or alter figures."
                                 ),
                                 evidence={
                                     "page": page_num,
-                                    "overlaid_text": " ".join(overlying_text_words),
-                                    "image_bbox": img_bbox,
+                                    "rect": r_coords,
+                                    "overlaid_text": sample_texts,
+                                    "sample_overlaid_text": ", ".join(sample_texts)[:200],
                                 },
                                 alternative_explanations=[
-                                    "OCR text layer placed over a scanned document page.",
+                                    "Legitimate form field or intentional white card container in document design.",
+                                    "Authorized redaction with new replacement figure.",
                                 ],
-                                recommended_action="Verify whether the text matches an OCR layer or was typed manually.",
+                                recommended_action="Inspect the highlighted region to verify whether original figures were altered.",
                             )
                         )
 
-            # 10. Check G: Annotation and Form Field Overlays
-            for annot_rec in page_annots:
-                t_name = annot_rec.type_name
-                annot_rect = annot_rec.rect
-                if t_name in ("FreeText", "Square", "Redact", "Stamp") and not annot_rec.is_highlight:
-                    covered_texts = [sp.text for sp in page_spans if _boxes_overlap(annot_rect, sp.bbox, min_overlap_ratio=0.20)]
-                    if covered_texts:
+                # 5. Check B: White Text Masking Layer
+                white_text_overlays: list[tuple[TextSpanRecord, TextSpanRecord]] = []
+                for wsp in white_spans:
+                    for vsp in visible_spans:
+                        if _boxes_overlap(wsp.bbox, vsp.bbox, min_overlap_ratio=0.12):
+                            white_text_overlays.append((wsp, vsp))
+
+                if white_text_overlays:
+                    sample_w, sample_v = white_text_overlays[0]
+                    findings.append(
+                        ForensicFinding(
+                            code="STRUCT_WHITE_TEXT_LAYER_OVERLAY",
+                            category="possible_text_replacement",
+                            domain="content_stream",
+                            severity="high",
+                            confidence=0.85,
+                            anomaly_confidence=0.95,
+                            tampering_confidence=0.85,
+                            description=(
+                                f"Page {page_num} contains a white text masking layer ('{sample_w.text}') directly colliding with "
+                                f"visible text ('{sample_v.text}'). This technique is employed in document forgery to visually wipe out "
+                                "original headings or numbers while superimposing altered text without rasterization."
+                            ),
+                            evidence={
+                                "page": page_num,
+                                "white_layer_text": sample_w.text,
+                                "visible_text": sample_v.text,
+                                "white_layer_bbox": sample_w.bbox,
+                                "visible_bbox": sample_v.bbox,
+                                "overlay_count": len(white_text_overlays),
+                            },
+                            alternative_explanations=[
+                                "Reverse-contrast typography (white text on dark vector background).",
+                            ],
+                            recommended_action="Verify surrounding background color and check if original text was hidden.",
+                        )
+                    )
+                elif white_spans:
+                    sample_w = white_spans[0]
+                    findings.append(
+                        ForensicFinding(
+                            code="STRUCT_INVISIBLE_WHITE_TEXT",
+                            category="suspicious",
+                            domain="content_stream",
+                            severity="medium",
+                            confidence=0.55,
+                            anomaly_confidence=0.85,
+                            tampering_confidence=0.45,
+                            description=(
+                                f"Page {page_num} contains {len(white_spans)} invisible white text span(s) ('{sample_w.text}'). "
+                                "White text on white background is invisible to readers and may indicate hidden redaction remnants or search-indexing padding."
+                            ),
+                            evidence={
+                                "page": page_num,
+                                "sample_text": sample_w.text,
+                                "bbox": sample_w.bbox,
+                                "white_span_count": len(white_spans),
+                            },
+                            alternative_explanations=[
+                                "Search indexing, accessibility padding, or dark background styling.",
+                            ],
+                            recommended_action="Inspect whether the text is visible to readers or hidden in the background.",
+                        )
+                    )
+
+                # 6. Check C: Opaque Covering Objects & Non-White Intersections
+                for shape in opaque_shapes:
+                    if shape["is_white"]:
+                        continue  # Handled above
+                    r_coords = shape["rect"]
+                    # Exclude full page banners or giant cards
+                    if shape["width"] >= 0.88 * page.rect.width and shape["height"] >= 0.75 * page.rect.height:
+                        continue
+                    if shape["width"] < 12 or shape["height"] < 6:
+                        continue
+
+                    # Check if this opaque shape intersects text
+                    intersecting = [
+                        sp for sp in page_spans
+                        if not sp.is_highlighted and _boxes_overlap(r_coords, sp.bbox, min_overlap_ratio=0.30)
+                    ]
+                    if 1 <= len(intersecting) <= 3 and shape["width"] <= 250 and shape["height"] <= 45:
                         findings.append(
                             ForensicFinding(
-                                code="STRUCT_ANNOTATION_OVERLAY",
+                                code="STRUCT_POSSIBLE_COVERING_OBJECT",
                                 category="possible_covering_object",
                                 domain="content_stream",
                                 severity="medium",
-                                confidence=0.70,
-                                anomaly_confidence=0.90,
-                                tampering_confidence=0.65,
+                                confidence=0.60,
+                                anomaly_confidence=0.85,
+                                tampering_confidence=0.50,
                                 description=(
-                                    f"Page {page_num} contains a {t_name} annotation placed over underlying text "
-                                    f"('{', '.join(covered_texts[:3])}'). Annotations covering body text often represent unauthorized edits."
+                                    f"Page {page_num} contains an opaque graphical object at {r_coords} "
+                                    f"intersecting text ('{', '.join(s.text for s in intersecting)}'). "
+                                    "This pattern can indicate a redaction patch or obscured content."
                                 ),
-                                evidence={"page": page_num, "annotation_type": t_name, "rect": annot_rect, "covered_text": covered_texts},
+                                evidence={
+                                    "page": page_num,
+                                    "rect": r_coords,
+                                    "intersecting_text": [s.text for s in intersecting],
+                                },
                                 alternative_explanations=[
-                                    "Legitimate reviewer comment, callout note, or authorized redaction mark.",
+                                    "Designed callout badge, colored button, or intentional banner background.",
                                 ],
-                                recommended_action="Check the annotation author and review underlying covered content.",
+                                recommended_action="Inspect whether text inside the object is legibly styled or obscured.",
                             )
                         )
 
-        doc.close()
-    except Exception as page_err:
-        logger.warning("Error during structural page iteration: %s", page_err, exc_info=True)
-        limitations.append(f"Page structural inspection error: {page_err}")
+                # 7. Check D: Editor Placeholder Residue Text (e.g. "Type your text", "Insert text")
+                for sp in visible_spans:
+                    if EDITOR_PLACEHOLDER_REGEX.match(sp.text):
+                        findings.append(
+                            ForensicFinding(
+                                code="STRUCT_EDITOR_PLACEHOLDER_TEXT",
+                                category="possible_text_insertion",
+                                domain="content_stream",
+                                severity="high",
+                                confidence=0.85,
+                                anomaly_confidence=0.95,
+                                tampering_confidence=0.85,
+                                description=(
+                                    f"Page {page_num} contains PDF editor placeholder residue text '{sp.text}' at {sp.bbox}. "
+                                    "This string is a default placeholder created by PDF editing tools when a user adds a text box."
+                                ),
+                                evidence={
+                                    "page": page_num,
+                                    "text": sp.text,
+                                    "font": sp.font_name,
+                                    "bbox": sp.bbox,
+                                },
+                                alternative_explanations=[
+                                    "Sample form or instructional template containing placeholder instructions.",
+                                ],
+                                recommended_action="Verify if an unauthorized text box was inserted into the document.",
+                            )
+                        )
+
+                # 8. Check E: Foreign / Injected Font Text Detection
+                if primary_font_families:
+                    foreign_spans: list[TextSpanRecord] = []
+                    for sp in visible_spans:
+                        if _is_subheading_or_label(sp) or sp.font_size >= 13.5:
+                            continue
+                        fam = _normalize_font_family(sp.font_name)
+                        if fam not in primary_font_families and fam in GENERIC_FALLBACK_FONTS:
+                            foreign_spans.append(sp)
+
+                    if foreign_spans:
+                        # Group foreign spans by line (within 4 pt vertically)
+                        line_groups: list[list[TextSpanRecord]] = []
+                        for fsp in sorted(foreign_spans, key=lambda s: (s.bbox[1], s.bbox[0])):
+                            if line_groups and abs(fsp.bbox[1] - line_groups[-1][0].bbox[1]) <= 4.0:
+                                line_groups[-1].append(fsp)
+                            else:
+                                line_groups.append([fsp])
+
+                        for l_grp in line_groups:
+                            l_grp.sort(key=lambda s: s.bbox[0])
+                            l_text = " ".join(s.text for s in l_grp)
+                            l_bbox = [
+                                round(min(s.bbox[0] for s in l_grp), 2),
+                                round(min(s.bbox[1] for s in l_grp), 2),
+                                round(max(s.bbox[2] for s in l_grp), 2),
+                                round(max(s.bbox[3] for s in l_grp), 2),
+                            ]
+                            sample_font = l_grp[0].font_name
+                            findings.append(
+                                ForensicFinding(
+                                    code="STRUCT_FOREIGN_FONT_TEXT_INSERTION",
+                                    category="possible_text_insertion",
+                                    domain="content_stream",
+                                    severity="medium",
+                                    confidence=0.75,
+                                    anomaly_confidence=0.90,
+                                    tampering_confidence=0.70,
+                                    description=(
+                                        f"Page {page_num} contains text '{l_text[:80]}' using injected font "
+                                        f"'{sample_font}' at {l_bbox}, which does not match the document's established "
+                                        f"font palette ({', '.join(sorted(primary_font_families))}). "
+                                        "This pattern indicates text added or edited with a third-party PDF editor."
+                                    ),
+                                    evidence={
+                                        "page": page_num,
+                                        "text": l_text,
+                                        "font": sample_font,
+                                        "bbox": l_bbox,
+                                        "primary_fonts": list(primary_font_families),
+                                    },
+                                    alternative_explanations=[
+                                        "Intentional font styling or mixed-font template design.",
+                                    ],
+                                    recommended_action="Inspect the highlighted text to verify whether it represents unauthorized replacement or inserted text.",
+                                )
+                            )
+
+                # 9. Check F: Appended Secondary Content Streams with Text
+                try:
+                    c_xrefs = page.get_contents()
+                    if isinstance(c_xrefs, (list, tuple)) and len(c_xrefs) > 1:
+                        appended_text_streams = []
+                        for idx in range(1, len(c_xrefs)):
+                            s_bytes = doc.xref_stream(c_xrefs[idx])
+                            if (b"Tj" in s_bytes) or (b"TJ" in s_bytes) or (b"'" in s_bytes) or (b'"' in s_bytes):
+                                appended_text_streams.append(idx + 1)
+                        if appended_text_streams and not any(
+                            f.code == "STREAM_APPENDED_CONTENT_STREAM_TEXT" and f.evidence.get("page") == page_num
+                            for f in findings
+                        ):
+                            findings.append(
+                                ForensicFinding(
+                                    code="STREAM_APPENDED_CONTENT_STREAM_TEXT",
+                                    category="possible_text_insertion",
+                                    domain="content_stream",
+                                    severity="medium",
+                                    confidence=0.70,
+                                    anomaly_confidence=0.85,
+                                    tampering_confidence=0.65,
+                                    description=(
+                                        f"Page {page_num} renders text from appended secondary content stream(s) "
+                                        f"(stream(s) {', '.join(str(i) for i in appended_text_streams)} of {len(c_xrefs)}). "
+                                        "This layered architecture commonly results when an editor overlays new text on an existing PDF."
+                                    ),
+                                    evidence={
+                                        "page": page_num,
+                                        "stream_count": len(c_xrefs),
+                                        "appended_text_streams": appended_text_streams,
+                                    },
+                                    alternative_explanations=[
+                                        "Document management system watermark or automated stamp layer.",
+                                    ],
+                                    recommended_action="Review text on this page to identify overlayed content.",
+                                )
+                            )
+                except Exception as stream_check_err:
+                    logger.debug("Page stream check note: %s", stream_check_err)
+
+                # 10. Check G: Context-Aware Formatting Consistency (excluding legitimate subheadings)
+                if len(visible_spans) >= 5:
+                    col_groups: dict[int, list[TextSpanRecord]] = {}
+                    for sp in visible_spans:
+                        if sp.font_size >= 14.0 or sp.is_highlighted or _is_subheading_or_label(sp):
+                            continue
+                        col_key = int(sp.bbox[0] / 15.0) * 15
+                        col_groups.setdefault(col_key, []).append(sp)
+
+                    for col_key, group in col_groups.items():
+                        if len(group) >= 4:
+                            font_hist: dict[str, int] = {}
+                            for s in group:
+                                font_hist[s.font_name] = font_hist.get(s.font_name, 0) + 1
+                            dom_font = max(font_hist, key=font_hist.get)
+                            if font_hist[dom_font] >= len(group) - 1 and len(font_hist) > 1:
+                                outliers = [
+                                    s for s in group
+                                    if s.font_name != dom_font
+                                    and not s.is_highlighted
+                                    and not (s.flags & 2)
+                                    and not _is_subheading_or_label(s)
+                                ]
+                                if outliers:
+                                    out_sp = outliers[0]
+                                    findings.append(
+                                        ForensicFinding(
+                                            code="STRUCT_FORMATTING_ANOMALY",
+                                            category="formatting_anomaly",
+                                            domain="layout_analysis",
+                                            severity="low",
+                                            confidence=0.40,
+                                            anomaly_confidence=0.85,
+                                            tampering_confidence=0.35,
+                                            description=(
+                                                f"Page {page_num} contains an isolated value '{out_sp.text}' using font "
+                                                f"'{out_sp.font_name}' in a column where all other items use '{dom_font}'. "
+                                                "Isolated font differences in tabular columns can indicate pasted or edited values."
+                                            ),
+                                            evidence={
+                                                "page": page_num,
+                                                "text": out_sp.text,
+                                                "font": out_sp.font_name,
+                                                "expected_font": dom_font,
+                                                "bbox": out_sp.bbox,
+                                            },
+                                            alternative_explanations=[
+                                                "Intentional emphasis, font substitution, or template design variation.",
+                                            ],
+                                            recommended_action="Verify if the figure matches the surrounding data context.",
+                                        )
+                                    )
+
+                    # General page dominant font check for body paragraphs
+                    font_counts: dict[str, int] = {}
+                    for sp in visible_spans:
+                        font_counts[sp.font_name] = font_counts.get(sp.font_name, 0) + len(sp.text.split())
+
+                    total_words = sum(font_counts.values())
+                    if total_words > 10:
+                        dominant_font = max(font_counts, key=font_counts.get)
+                        dominant_share = font_counts[dominant_font] / total_words
+                        if dominant_share >= 0.70:
+                            isolated_spans = [
+                                sp for sp in visible_spans
+                                if sp.font_name != dominant_font
+                                and len(sp.text.split()) <= 6
+                                and font_counts.get(sp.font_name, 0) <= 6
+                                and not sp.is_highlighted
+                                and not _is_subheading_or_label(sp)
+                                and not any(f.evidence.get("text") == sp.text for f in findings if f.code in ("STRUCT_FORMATTING_ANOMALY", "STRUCT_FOREIGN_FONT_TEXT_INSERTION", "STRUCT_EDITOR_PLACEHOLDER_TEXT"))
+                            ]
+                            if isolated_spans:
+                                sample = isolated_spans[0]
+                                findings.append(
+                                    ForensicFinding(
+                                        code="STRUCT_INCONSISTENT_FONT_SWITCH",
+                                        category="formatting_anomaly",
+                                        domain="layout_analysis",
+                                        severity="low",
+                                        confidence=0.35,
+                                        anomaly_confidence=0.80,
+                                        tampering_confidence=0.30,
+                                        description=(
+                                            f"Page {page_num} has an isolated text segment '{sample.text}' using font "
+                                            f"'{sample.font_name}' in a page where {int(dominant_share * 100)}% of body text uses '{dominant_font}'."
+                                        ),
+                                        evidence={
+                                            "page": page_num,
+                                            "isolated_text": sample.text,
+                                            "isolated_font": sample.font_name,
+                                            "dominant_font": dominant_font,
+                                            "bbox": sample.bbox,
+                                        },
+                                        alternative_explanations=[
+                                            "Intentional stylistic emphasis, footer/header markup, or brand naming.",
+                                        ],
+                                        recommended_action="Inspect the text in document context.",
+                                    )
+                                )
+
+                # 11. Check H: Text-to-Text Overlaps
+                overlaps_found = 0
+                for i in range(len(page_spans)):
+                    for j in range(i + 1, len(page_spans)):
+                        s1 = page_spans[i]
+                        s2 = page_spans[j]
+                        if s1.text != s2.text and _boxes_overlap(s1.bbox, s2.bbox, min_overlap_ratio=0.30):
+                            ix0 = max(s1.bbox[0], s2.bbox[0])
+                            iy0 = max(s1.bbox[1], s2.bbox[1])
+                            ix1 = min(s1.bbox[2], s2.bbox[2])
+                            iy1 = min(s1.bbox[3], s2.bbox[3])
+                            area_overlap = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+                            area_s1 = max(1.0, (s1.bbox[2] - s1.bbox[0]) * (s1.bbox[3] - s1.bbox[1]))
+                            if (area_overlap / area_s1) > 0.40:
+                                overlaps_found += 1
+                                if overlaps_found == 1:
+                                    findings.append(
+                                        ForensicFinding(
+                                            code="STRUCT_TEXT_OVERLAP",
+                                            category="text_overlap",
+                                            domain="layout_analysis",
+                                            severity="medium",
+                                            confidence=0.60,
+                                            anomaly_confidence=0.90,
+                                            tampering_confidence=0.55,
+                                            description=(
+                                                f"Page {page_num} contains conflicting overlapping text strings: "
+                                                f"'{s1.text}' overlaps with '{s2.text}'."
+                                            ),
+                                            evidence={
+                                                "page": page_num,
+                                                "string1": s1.text,
+                                                "string2": s2.text,
+                                                "bbox1": s1.bbox,
+                                                "bbox2": s2.bbox,
+                                            },
+                                            alternative_explanations=[
+                                                "Complex vector graphics, watermarks, or typography kerning effects.",
+                                            ],
+                                            recommended_action="Inspect whether the text collision was caused by superimposed edits.",
+                                        )
+                                    )
+
+                # 12. Check I: Embedded Images Inspection & Text-over-Image
+                page_images = page.get_images(full=True)
+                for img_info in page_images:
+                    xref = img_info[0]
+                    w = img_info[2]
+                    h = img_info[3]
+                    cs = str(img_info[5])
+                    img_rects = page.get_image_rects(xref)
+                    img_bbox = None
+                    if img_rects:
+                        r = img_rects[0]
+                        img_bbox = [float(round(c, 2)) for c in [r.x0, r.y0, r.x1, r.y1]]
+
+                    img_rec = ImageRecord(
+                        page=page_num,
+                        xref=xref,
+                        width=w,
+                        height=h,
+                        bbox=img_bbox,
+                        colorspace=cs,
+                    )
+                    all_images.append(img_rec)
+
+                    if img_bbox and (img_bbox[2] - img_bbox[0] > 150) and (img_bbox[3] - img_bbox[1] > 150):
+                        overlying_text_words: list[str] = []
+                        for sp in page_spans:
+                            if not sp.is_highlighted and _rect_contains(img_bbox, sp.bbox, margin=0.0):
+                                overlying_text_words.extend(sp.text.split())
+
+                        if 1 <= len(overlying_text_words) <= 8:
+                            findings.append(
+                                ForensicFinding(
+                                    code="STRUCT_TEXT_OVER_IMAGE",
+                                    category="possible_text_insertion",
+                                    domain="layout_analysis",
+                                    severity="medium",
+                                    confidence=0.50,
+                                    anomaly_confidence=0.85,
+                                    tampering_confidence=0.50,
+                                    description=(
+                                        f"Page {page_num} contains sparse digital text ({len(overlying_text_words)} words: "
+                                        f"'{' '.join(overlying_text_words)}') directly overlying an embedded bitmap image. "
+                                        "This pattern occurs when numerical figures or names are typed over scanned receipts or letters."
+                                    ),
+                                    evidence={
+                                        "page": page_num,
+                                        "overlaid_text": " ".join(overlying_text_words),
+                                        "image_bbox": img_bbox,
+                                    },
+                                    alternative_explanations=[
+                                        "OCR text layer placed over a scanned document page.",
+                                    ],
+                                    recommended_action="Verify whether the text matches an OCR layer or was typed manually.",
+                                )
+                            )
+
+                # 13. Check J: Annotation and Form Field Overlays
+                for annot_rec in page_annots:
+                    t_name = annot_rec.type_name
+                    annot_rect = annot_rec.rect
+                    if t_name in ("FreeText", "Square", "Redact", "Stamp") and not annot_rec.is_highlight:
+                        covered_texts = [sp.text for sp in page_spans if _boxes_overlap(annot_rect, sp.bbox, min_overlap_ratio=0.20)]
+                        if covered_texts:
+                            findings.append(
+                                ForensicFinding(
+                                    code="STRUCT_ANNOTATION_OVERLAY",
+                                    category="possible_covering_object",
+                                    domain="content_stream",
+                                    severity="medium",
+                                    confidence=0.70,
+                                    anomaly_confidence=0.90,
+                                    tampering_confidence=0.65,
+                                    description=(
+                                        f"Page {page_num} contains a {t_name} annotation placed over underlying text "
+                                        f"('{', '.join(covered_texts[:3])}'). Annotations covering body text often represent unauthorized edits."
+                                    ),
+                                    evidence={"page": page_num, "annotation_type": t_name, "rect": annot_rect, "covered_text": covered_texts},
+                                    alternative_explanations=[
+                                        "Legitimate reviewer comment, callout note, or authorized redaction mark.",
+                                    ],
+                                    recommended_action="Check the annotation author and review underlying covered content.",
+                                )
+                            )
+
+            except Exception as page_err:
+                logger.warning("Error during structural inspection of page %d: %s", page_num, page_err, exc_info=True)
+                limitations.append(f"Page {page_num} structural inspection error: {page_err}")
+
+        # 14. Exact Structural Comparison when Reference Original is Provided
+        if original_source is not None:
+            try:
+                orig_bytes = original_source.read_bytes() if isinstance(original_source, Path) else original_source
+                if orig_bytes:
+                    doc_orig = fitz.open(stream=orig_bytes, filetype="pdf")
+                    for p_idx in range(min(len(doc_orig), len(doc))):
+                        p_num = p_idx + 1
+                        words_orig = [w[4] for w in doc_orig[p_idx].get_text("words", sort=True)]
+                        cand_words_meta = doc[p_idx].get_text("words", sort=True)
+                        words_cand = [w[4] for w in cand_words_meta]
+                        sm = difflib.SequenceMatcher(None, words_orig, words_cand)
+                        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+                            if tag == "replace":
+                                old_txt = " ".join(words_orig[i1:i2])
+                                new_txt = " ".join(words_cand[j1:j2])
+                                matching_boxes = [cand_words_meta[k][:4] for k in range(j1, j2)]
+                                c_bbox = [
+                                    round(min(b[0] for b in matching_boxes), 1),
+                                    round(min(b[1] for b in matching_boxes), 1),
+                                    round(max(b[2] for b in matching_boxes), 1),
+                                    round(max(b[3] for b in matching_boxes), 1),
+                                ] if matching_boxes else None
+                                findings.append(
+                                    ForensicFinding(
+                                        code="STRUCT_EXACT_TEXT_MODIFIED",
+                                        category="confirmed",
+                                        domain="content_stream",
+                                        severity="high",
+                                        confidence=0.98,
+                                        anomaly_confidence=0.98,
+                                        tampering_confidence=0.95,
+                                        description=(
+                                            f"Page {p_num} exact text change confirmed against reference original: "
+                                            f"'{old_txt}' was replaced with '{new_txt}' at {c_bbox}."
+                                        ),
+                                        evidence={
+                                            "page": p_num,
+                                            "old_text": old_txt,
+                                            "new_text": new_txt,
+                                            "bbox": c_bbox,
+                                        },
+                                        alternative_explanations=[
+                                            "Authorized revision or editorial update.",
+                                        ],
+                                        recommended_action="Verify if the modification was authorized by the document owner.",
+                                    )
+                                )
+                            elif tag == "insert":
+                                new_txt = " ".join(words_cand[j1:j2])
+                                matching_boxes = [cand_words_meta[k][:4] for k in range(j1, j2)]
+                                c_bbox = [
+                                    round(min(b[0] for b in matching_boxes), 1),
+                                    round(min(b[1] for b in matching_boxes), 1),
+                                    round(max(b[2] for b in matching_boxes), 1),
+                                    round(max(b[3] for b in matching_boxes), 1),
+                                ] if matching_boxes else None
+                                findings.append(
+                                    ForensicFinding(
+                                        code="STRUCT_EXACT_TEXT_ADDED",
+                                        category="confirmed",
+                                        domain="content_stream",
+                                        severity="high",
+                                        confidence=0.98,
+                                        anomaly_confidence=0.98,
+                                        tampering_confidence=0.95,
+                                        description=(
+                                            f"Page {p_num} exact text insertion confirmed against reference original: "
+                                            f"'{new_txt}' was added at {c_bbox}."
+                                        ),
+                                        evidence={
+                                            "page": p_num,
+                                            "added_text": new_txt,
+                                            "bbox": c_bbox,
+                                        },
+                                        alternative_explanations=[
+                                            "Authorized revision or editorial addition.",
+                                        ],
+                                        recommended_action="Inspect the added text segment.",
+                                    )
+                                )
+                    doc_orig.close()
+            except Exception as orig_diff_err:
+                logger.debug("Exact structural original diff note: %s", orig_diff_err)
+
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
 
     # Calculate granular counts for enhanced text tampering audit
     formatting_count = sum(1 for f in findings if f.category == "formatting_anomaly")
     overlaps_count = sum(1 for f in findings if f.category == "text_overlap")
     covering_count = sum(1 for f in findings if f.category == "possible_covering_object")
-    replacements_count = sum(1 for f in findings if f.category == "possible_text_replacement")
-    insertions_count = sum(1 for f in findings if f.category == "possible_text_insertion")
+    replacements_count = sum(
+        1 for f in findings
+        if f.category in ("possible_text_replacement", "revision_change_detected")
+        or f.code in ("STRUCT_EXACT_TEXT_MODIFIED", "VERIFY_TEXT_DIFF_MODIFIED")
+    )
+    insertions_count = sum(
+        1 for f in findings
+        if f.category == "possible_text_insertion"
+        or f.code in (
+            "STRUCT_EXACT_TEXT_ADDED",
+            "STRUCT_FOREIGN_FONT_TEXT_INSERTION",
+            "STRUCT_EDITOR_PLACEHOLDER_TEXT",
+            "STREAM_APPENDED_CONTENT_STREAM_TEXT",
+            "VERIFY_TEXT_DIFF_ADDED",
+        )
+    )
 
     # Build summary
-    suspicious_count = sum(1 for f in findings if f.category in ("suspicious", "possible_text_replacement", "possible_covering_object", "possible_text_insertion"))
+    exact_mods = sum(1 for f in findings if f.code in ("STRUCT_EXACT_TEXT_MODIFIED", "STRUCT_EXACT_TEXT_ADDED"))
     confirmed_count = sum(1 for f in findings if f.category in ("confirmed", "revision_change_detected"))
-    if confirmed_count > 0:
+    suspicious_count = sum(1 for f in findings if f.category in ("suspicious", "possible_text_replacement", "possible_covering_object", "possible_text_insertion"))
+
+    if exact_mods > 0:
+        summary = f"Structural analysis and reference comparison identified {exact_mods} confirmed exact text change(s)."
+    elif confirmed_count > 0:
         summary = f"Structural analysis identified {confirmed_count} confirmed structural modification(s)."
-    elif suspicious_count > 0:
-        summary = (
-            f"Structural analysis identified {suspicious_count} potential text tampering indicator(s) "
-            f"({replacements_count} replacement(s), {covering_count} covering object(s), {overlaps_count} overlap(s))."
-        )
+    elif insertions_count > 0 or replacements_count > 0 or covering_count > 0 or overlaps_count > 0:
+        parts = []
+        if insertions_count > 0:
+            parts.append(f"{insertions_count} text insertion(s)")
+        if replacements_count > 0:
+            parts.append(f"{replacements_count} replacement(s)")
+        if covering_count > 0:
+            parts.append(f"{covering_count} covering object(s)")
+        if overlaps_count > 0:
+            parts.append(f"{overlaps_count} overlap(s)")
+        summary = f"Structural analysis identified potential text tampering indicator(s) ({', '.join(parts)})."
     elif formatting_count > 0:
         summary = f"Structural analysis completed; {formatting_count} formatting anomaly/anomalies detected without structural cover-ups."
     else:
@@ -766,4 +1082,3 @@ def analyze_structural_layer(loaded_pdf: LoadedPdf) -> StructuralLayerResult:
         revision_history_available=has_revs,
         historical_comparison_status="available" if has_revs else "unavailable_fully_rewritten",
     )
-

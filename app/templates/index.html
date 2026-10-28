@@ -381,20 +381,25 @@
     .rendered-page-frame {
       display: flex;
       justify-content: center;
-      align-items: center;
-      max-height: 650px;
+      align-items: flex-start;
+      min-height: 480px;
+      max-height: 750px;
       overflow: auto;
       background: #020617;
       border-radius: 6px;
       border: 1px solid var(--border-color);
-      padding: 1rem;
+      padding: 1.25rem;
+      position: relative;
     }
 
     .rendered-page-img {
       max-width: 100%;
       height: auto;
       object-fit: contain;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+      border-radius: 4px;
+      background: #ffffff;
+      transition: width 0.15s ease;
     }
 
     /* Diff Visual Box */
@@ -860,14 +865,20 @@
           <p id="visualSummary" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">-</p>
 
           <div class="visual-viewer" id="visualViewer">
-            <div class="viewer-controls">
+            <div class="viewer-controls" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.75rem;">
               <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <label for="pageSelect" style="font-size: 0.85rem; color: var(--text-muted);">Page:</label>
-                <select id="pageSelect" style="background: var(--card-bg-subtle); color: white; border: 1px solid var(--border-color); border-radius: 4px; padding: 0.3rem 0.6rem;"></select>
+                <label for="pageSelect" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">Select Page:</label>
+                <select id="pageSelect" style="background: var(--card-bg-subtle); color: white; border: 1px solid var(--border-color); border-radius: 4px; padding: 0.35rem 0.65rem; font-size: 0.85rem;"></select>
               </div>
-              <div style="display: flex; gap: 0.5rem;">
-                <button class="viewer-toggle-btn active" id="btnShowOriginal">Original Render</button>
-                <button class="viewer-toggle-btn" id="btnShowOverlay">Suspicious Heatmap / Overlay</button>
+              <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                <button class="viewer-toggle-btn active" id="btnShowOriginal">Clean Document View</button>
+                <button class="viewer-toggle-btn" id="btnShowOverlay">Highlighted Changes & Anomalies</button>
+                <div style="display: flex; gap: 0.25rem; align-items: center; border-left: 1px solid var(--border-color); padding-left: 0.5rem;">
+                  <button class="viewer-toggle-btn" id="btnZoomOut" title="Zoom Out" style="padding: 0.25rem 0.55rem; font-weight: bold;">−</button>
+                  <span id="zoomLevelText" style="font-size: 0.8rem; color: var(--text-muted); min-width: 42px; text-align: center;">100%</span>
+                  <button class="viewer-toggle-btn" id="btnZoomIn" title="Zoom In" style="padding: 0.25rem 0.55rem; font-weight: bold;">+</button>
+                  <button class="viewer-toggle-btn" id="btnZoomReset" title="Fit to Width" style="padding: 0.25rem 0.55rem;">Fit</button>
+                </div>
               </div>
             </div>
 
@@ -1188,10 +1199,20 @@
             const visPane = document.getElementById('tab-visual');
             if (visPane) visPane.classList.add('active');
             currentPreviewMode = 'overlay';
-            document.getElementById('btnShowOverlay').classList.add('active');
-            document.getElementById('btnShowOriginal').classList.remove('active');
+            const btnOver = document.getElementById('btnShowOverlay');
+            const btnOrig = document.getElementById('btnShowOriginal');
+            if (btnOver) btnOver.classList.add('active');
+            if (btnOrig) btnOrig.classList.remove('active');
+
+            // Automatically select first page with detected changes
+            let targetIdx = 0;
+            if (globalPreviws && globalPreviws.length > 0) {
+              const changeIdx = globalPreviws.findIndex(p => p.suspicious_regions && p.suspicious_regions.length > 0);
+              if (changeIdx !== -1) targetIdx = changeIdx;
+            }
             const pageSelect = document.getElementById('pageSelect');
-            updateVisualPreview(parseInt(pageSelect.value || 0));
+            if (pageSelect) pageSelect.value = targetIdx;
+            updateVisualPreview(targetIdx);
             document.getElementById('visualViewer').scrollIntoView({ behavior: 'smooth' });
           };
         } else {
@@ -1260,14 +1281,27 @@
 
       if (globalPreviws.length > 0) {
         document.getElementById('visualViewer').style.display = 'flex';
+        let initialPageIdx = 0;
+        let foundChanges = false;
+
         globalPreviws.forEach((p, idx) => {
           const opt = document.createElement('option');
           opt.value = idx;
-          opt.textContent = `Page ${p.page_number} (${p.suspicious_regions.length} region${p.suspicious_regions.length !== 1 ? 's' : ''})`;
+          const regCount = p.suspicious_regions ? p.suspicious_regions.length : 0;
+          if (regCount > 0) {
+            opt.textContent = `Page ${p.page_number} — ${regCount} detected change${regCount !== 1 ? 's' : ''}`;
+            if (!foundChanges) {
+              initialPageIdx = idx;
+              foundChanges = true;
+            }
+          } else {
+            opt.textContent = `Page ${p.page_number} — Clean (0 anomalies)`;
+          }
           pageSelect.appendChild(opt);
         });
+        pageSelect.value = initialPageIdx;
         pageSelect.onchange = () => updateVisualPreview(parseInt(pageSelect.value));
-        updateVisualPreview(0);
+        updateVisualPreview(initialPageIdx);
       } else {
         document.getElementById('visualViewer').style.display = 'none';
       }
@@ -1356,6 +1390,30 @@
       document.getElementById('rawMetadataJson').textContent = JSON.stringify(res.metadata, null, 2);
     }
 
+    let currentZoom = 100;
+
+    function applyZoom(zoom) {
+      currentZoom = Math.min(250, Math.max(50, zoom));
+      const imgElem = document.getElementById('renderedPageImg');
+      const zoomText = document.getElementById('zoomLevelText');
+      if (imgElem) {
+        if (currentZoom === 100) {
+          imgElem.style.width = '';
+          imgElem.style.maxWidth = '100%';
+        } else {
+          imgElem.style.maxWidth = 'none';
+          imgElem.style.width = `${currentZoom}%`;
+        }
+      }
+      if (zoomText) {
+        zoomText.textContent = `${currentZoom}%`;
+      }
+    }
+
+    document.getElementById('btnZoomIn')?.addEventListener('click', () => applyZoom(currentZoom + 25));
+    document.getElementById('btnZoomOut')?.addEventListener('click', () => applyZoom(currentZoom - 25));
+    document.getElementById('btnZoomReset')?.addEventListener('click', () => applyZoom(100));
+
     function updateVisualPreview(idx) {
       if (!globalPreviws[idx]) return;
       const p = globalPreviws[idx];
@@ -1363,10 +1421,59 @@
       imgElem.src = currentPreviewMode === 'original' ? p.original_image_base64 : p.overlay_image_base64;
 
       const notesBox = document.getElementById('visualRegionNotes');
-      if (p.suspicious_regions.length > 0) {
-        notesBox.innerHTML = `<strong>Page ${p.page_number} Flagged Regions:</strong> ` + p.suspicious_regions.map(r => `${r.description} (${r.technique})`).join('; ');
+      if (p.suspicious_regions && p.suspicious_regions.length > 0) {
+        const techBadges = {
+          text_modified: { label: 'MODIFIED TEXT', color: '#ef4444' },
+          text_added: { label: 'INSERTED TEXT', color: '#f97316' },
+          editor_placeholder: { label: 'EDITOR PLACEHOLDER', color: '#f43f5e' },
+          foreign_font: { label: 'INJECTED FONT', color: '#a855f7' },
+          whiteout_rect: { label: 'WHITEOUT RECT', color: '#ef4444' },
+          white_text_layer: { label: 'WHITE TEXT MASK', color: '#b91c1c' },
+          hidden_white_text: { label: 'HIDDEN TEXT', color: '#a855f7' },
+          background_texture: { label: 'WHITEOUT EDIT', color: '#ef4444' },
+          covering_object: { label: 'COVERING OBJECT', color: '#d97706' },
+          text_collision: { label: 'TEXT COLLISION', color: '#f59e0b' },
+          text_overlap: { label: 'TEXT OVERLAP', color: '#f59e0b' },
+          copy_move: { label: 'DUPLICATE REGION', color: '#3b82f6' },
+          text_edge: { label: 'EDGE ANOMALY', color: '#eab308' },
+          formatting_anomaly: { label: 'FONT ANOMALY', color: '#eab308' }
+        };
+
+        let html = `
+          <div style="background: var(--card-bg-subtle); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.85rem; margin-top: 0.75rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; flex-wrap: wrap; gap: 0.5rem;">
+              <span style="font-weight: 600; color: #f8fafc; font-size: 0.9rem;">
+                Page ${p.page_number} Detected Changes & Highlighted Regions (${p.suspicious_regions.length})
+              </span>
+              <span style="font-size: 0.75rem; color: var(--text-muted);">
+                Toggle "Clean Document View" vs "Highlighted Changes & Anomalies" above to compare.
+              </span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+        `;
+
+        p.suspicious_regions.forEach(r => {
+          const info = techBadges[r.technique] || { label: (r.technique || 'ANOMALY').replace(/_/g, ' ').toUpperCase(), color: '#94a3b8' };
+          const coords = Array.isArray(r.bbox_pdf) ? `at [${r.bbox_pdf.join(', ')}]` : '';
+          html += `
+            <div style="display: flex; align-items: flex-start; gap: 0.6rem; font-size: 0.82rem; background: rgba(15, 23, 42, 0.6); padding: 0.45rem 0.65rem; border-radius: 4px; border-left: 3px solid ${info.color};">
+              <span style="background: ${info.color}; color: #ffffff; padding: 0.15rem 0.45rem; border-radius: 3px; font-weight: 700; font-size: 0.7rem; white-space: nowrap; letter-spacing: 0.03em;">
+                ${info.label}
+              </span>
+              <span style="color: #e2e8f0; flex: 1; word-break: break-word;">${escapeHtml(r.description)}</span>
+              <span style="color: #94a3b8; font-size: 0.75rem; white-space: nowrap;">${coords}</span>
+            </div>
+          `;
+        });
+
+        html += `</div></div>`;
+        notesBox.innerHTML = html;
       } else {
-        notesBox.textContent = `Page ${p.page_number} has no visual sharpness or texture outliers detected.`;
+        notesBox.innerHTML = `
+          <div style="background: var(--card-bg-subtle); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.75rem; margin-top: 0.75rem; color: #34d399; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem;">
+            <span>✓</span> Page ${p.page_number} has no localized text alterations, placeholder residue, or visual anomalies detected.
+          </div>
+        `;
       }
     }
 

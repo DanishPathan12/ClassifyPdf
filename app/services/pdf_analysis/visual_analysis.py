@@ -38,7 +38,7 @@ from app.services.pdf_analysis.pdf_loader import LoadedPdf
 logger = logging.getLogger("pdf_analyser.visual_analysis")
 
 DEFAULT_RENDER_DPI: int = 150
-MAX_PAGES_TO_RENDER: int = 5  # Performance protection for large documents
+MAX_PAGES_TO_RENDER: int = 20  # Complete visual inspection across document pages
 
 
 @dataclass
@@ -303,6 +303,7 @@ def analyze_visual_layer(
     loaded_pdf: LoadedPdf,
     dpi: int = DEFAULT_RENDER_DPI,
     max_pages: int = MAX_PAGES_TO_RENDER,
+    structural_findings: list[ForensicFinding] | None = None,
 ) -> VisualLayerResult:
     """Execute complete Layer 2 pixel-level and visual analysis."""
     if not loaded_pdf.is_valid:
@@ -353,13 +354,20 @@ def analyze_visual_layer(
             page_num = page_idx + 1
             page = doc[page_idx]
 
-            # 1. Render page at target DPI
+            # 1. Render page at target DPI (robust color space handling for Grayscale, RGB, RGBA/CMYK)
             pix = page.get_pixmap(dpi=dpi, alpha=False)
-            img_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, pix.n))
-            if pix.n == 4:
-                img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_RGBA2RGB)
+            if pix.n == 1:
+                gray_raw = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width))
+                img_rgb = cv2.cvtColor(gray_raw, cv2.COLOR_GRAY2RGB)
+                gray = gray_raw
+            elif pix.n == 4:
+                img_rgba = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, 4))
+                img_rgb = cv2.cvtColor(img_rgba, cv2.COLOR_RGBA2RGB)
+                gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+            else:
+                img_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, 3))
+                gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
 
-            gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
             h_px, w_px = gray.shape
 
             page_regions: list[SuspiciousVisualRegion] = []
@@ -631,7 +639,124 @@ def analyze_visual_layer(
                     )
                 )
 
-            # 7. Generate Visual Overlay Image with Clean Badges
+            # 6b. Integrate Structural and Verification Findings into Visual Regions
+            if structural_findings:
+                for sf in structural_findings:
+                    ev = getattr(sf, "evidence", {})
+                    if not isinstance(ev, dict) or ev.get("page") != page_num:
+                        continue
+
+                    raw_box = ev.get("bbox") or ev.get("rect")
+                    if not raw_box or not isinstance(raw_box, (list, tuple)) or len(raw_box) != 4:
+                        continue
+
+                    bx0, by0, bx1, by1 = float(raw_box[0]), float(raw_box[1]), float(raw_box[2]), float(raw_box[3])
+                    if bx1 <= bx0 or by1 <= by0:
+                        continue
+
+                    code = sf.code
+                    if code in ("STRUCT_EXACT_TEXT_MODIFIED", "VERIFY_TEXT_DIFF_MODIFIED"):
+                        tech = "text_modified"
+                        orig_t = ev.get("original_text", "")
+                        new_t = ev.get("new_text", "")
+                        desc = f"Altered text: '{orig_t}' -> '{new_t}'" if orig_t and new_t else sf.description
+                        sev = "high"
+                        conf = 0.98
+                    elif code in ("STRUCT_EXACT_TEXT_ADDED", "VERIFY_TEXT_DIFF_ADDED"):
+                        tech = "text_added"
+                        added_t = ev.get("added_text", "")
+                        desc = f"Inserted text: '{added_t}'" if added_t else sf.description
+                        sev = "high"
+                        conf = 0.98
+                    elif code == "STRUCT_EDITOR_PLACEHOLDER_TEXT":
+                        tech = "editor_placeholder"
+                        pl_t = ev.get("text", "")
+                        desc = f"Editor placeholder text: '{pl_t}'" if pl_t else sf.description
+                        sev = "high"
+                        conf = 0.95
+                    elif code == "STRUCT_FOREIGN_FONT_TEXT_INSERTION":
+                        tech = "foreign_font"
+                        f_name = ev.get("font", "")
+                        f_text = ev.get("text", "")
+                        desc = f"Injected font ('{f_name}'): '{f_text[:60]}'" if f_name and f_text else sf.description
+                        sev = "high"
+                        conf = 0.85
+                    elif code == "STRUCT_WHITEOUT_RECTANGLE_OVERLAY":
+                        tech = "whiteout_rect"
+                        desc = f"Whiteout rectangle overlay at {[round(c, 1) for c in raw_box]}"
+                        sev = "high"
+                        conf = 0.85
+                    elif code == "STRUCT_POSSIBLE_COVERING_OBJECT":
+                        tech = "covering_object"
+                        desc = f"Covering object over text at {[round(c, 1) for c in raw_box]}"
+                        sev = "medium"
+                        conf = 0.70
+                    elif code == "STRUCT_TEXT_OVERLAP":
+                        tech = "text_overlap"
+                        desc = f"Overlapping text collision: '{ev.get('text_a', '')}' colliding with '{ev.get('text_b', '')}'"
+                        sev = "medium"
+                        conf = 0.70
+                    elif code in ("STRUCT_FORMATTING_ANOMALY", "STRUCT_INCONSISTENT_FONT_SWITCH"):
+                        tech = "formatting_anomaly"
+                        txt = ev.get("text", "") or ev.get("isolated_text", "")
+                        f_name = ev.get("font", "") or ev.get("isolated_font", "")
+                        desc = f"Inconsistent font switch ('{f_name}'): '{txt[:40]}'"
+                        sev = "low"
+                        conf = 0.40
+                    else:
+                        continue
+
+                    b_pdf = [round(bx0, 2), round(by0, 2), round(bx1, 2), round(by1, 2)]
+                    px0 = max(0, int(bx0 * scale) - 3)
+                    py0 = max(0, int(by0 * scale) - 3)
+                    px1 = min(w_px - 1, int(bx1 * scale) + 3)
+                    py1 = min(h_px - 1, int(by1 * scale) + 3)
+
+                    # Deduplicate with existing page regions using priority hierarchy
+                    duplicate = False
+                    for idx_r, existing_r in enumerate(page_regions):
+                        if _boxes_overlap(b_pdf, existing_r.bbox_pdf, min_overlap_ratio=0.50):
+                            tech_ranks = {
+                                "text_modified": 10,
+                                "text_added": 9,
+                                "editor_placeholder": 8,
+                                "foreign_font": 7,
+                                "whiteout_rect": 6,
+                                "white_text_layer": 5,
+                                "background_texture": 4,
+                                "text_collision": 3,
+                                "text_overlap": 3,
+                                "covering_object": 2,
+                                "formatting_anomaly": 1,
+                                "text_edge": 0,
+                            }
+                            if tech_ranks.get(tech, 0) > tech_ranks.get(existing_r.technique, 0):
+                                page_regions[idx_r] = SuspiciousVisualRegion(
+                                    page=page_num,
+                                    bbox_pdf=b_pdf,
+                                    bbox_px=[px0, py0, px1, py1],
+                                    technique=tech,
+                                    description=desc,
+                                    confidence=conf,
+                                    severity=sev,
+                                )
+                            duplicate = True
+                            break
+
+                    if not duplicate:
+                        page_regions.append(
+                            SuspiciousVisualRegion(
+                                page=page_num,
+                                bbox_pdf=b_pdf,
+                                bbox_px=[px0, py0, px1, py1],
+                                technique=tech,
+                                description=desc,
+                                confidence=conf,
+                                severity=sev,
+                            )
+                        )
+
+            # 7. Generate Visual Overlay Image with Clean Badges and Highlight Tints
             overlay_rgb = img_rgb.copy()
             for reg in page_regions:
                 rx0, ry0, rx1, ry1 = reg.bbox_px
@@ -640,35 +765,70 @@ def analyze_visual_layer(
                 if rx1 <= rx0 or ry1 <= ry0:
                     continue
 
-                # Color based on severity: Red for medium/high, Amber for low
-                box_color = (239, 68, 68) if reg.severity in ("medium", "high") else (245, 158, 11)
+                # Distinct color palette per technique for crystal clarity
+                tech_colors = {
+                    "text_modified": (220, 38, 38),      # Crimson Red
+                    "text_added": (234, 88, 12),         # Vivid Orange-Red
+                    "editor_placeholder": (225, 29, 72), # Deep Magenta / Rose
+                    "foreign_font": (147, 51, 234),      # Purple / Violet (injected font)
+                    "whiteout_rect": (239, 68, 68),      # Bright Red
+                    "white_text_layer": (185, 28, 28),   # Dark Red
+                    "hidden_white_text": (168, 85, 247), # Violet
+                    "background_texture": (239, 68, 68), # Bright Red
+                    "covering_object": (217, 119, 6),    # Deep Amber
+                    "text_collision": (245, 158, 11),    # Amber
+                    "text_overlap": (245, 158, 11),      # Amber
+                    "copy_move": (59, 130, 246),         # Blue
+                    "text_edge": (234, 179, 8),          # Gold
+                    "formatting_anomaly": (234, 179, 8), # Gold
+                }
+                box_color = tech_colors.get(reg.technique, (239, 68, 68) if reg.severity in ("medium", "high") else (245, 158, 11))
 
                 if cv2 is not None:
-                    cv2.rectangle(overlay_rgb, (rx0, ry0), (rx1, ry1), box_color, 3)
+                    # 1. Translucent highlighter tint so underlying text remains crisp and readable
+                    sub = overlay_rgb[ry0:ry1, rx0:rx1]
+                    if sub.shape[0] > 0 and sub.shape[1] > 0:
+                        tint = np.full(sub.shape, box_color, dtype=np.uint8)
+                        overlay_rgb[ry0:ry1, rx0:rx1] = cv2.addWeighted(sub, 0.72, tint, 0.28, 0)
 
-                    # Clean readable badge
+                    # 2. Solid bounding border
+                    cv2.rectangle(overlay_rgb, (rx0, ry0), (rx1, ry1), box_color, 2)
+
+                    # 3. Clean readable badge
                     label_map = {
+                        "text_modified": "MODIFIED TEXT",
+                        "text_added": "INSERTED TEXT",
+                        "editor_placeholder": "EDITOR PLACEHOLDER",
+                        "foreign_font": "INJECTED FONT",
+                        "whiteout_rect": "WHITEOUT RECT",
                         "white_text_layer": "WHITE TEXT MASK",
                         "hidden_white_text": "HIDDEN WHITE TEXT",
                         "background_texture": "WHITEOUT EDIT",
-                        "text_collision": "TEXT OVERWRITE",
+                        "covering_object": "COVERING OBJECT",
+                        "text_collision": "TEXT COLLISION",
+                        "text_overlap": "TEXT OVERLAP",
                         "copy_move": "DUPLICATE REGION",
                         "text_edge": "TEXT EDGE ANOMALY",
-                        "annotation_overlay": "ANNOTATION OVERLAY",
+                        "formatting_anomaly": "FONT ANOMALY",
                     }
                     label = label_map.get(reg.technique, reg.technique.replace("_", " ").upper())
 
-                    font_scale = 0.42
+                    font_scale = 0.38
                     font_thickness = 1
                     (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
-                    badge_y0 = max(0, ry0 - text_h - 8)
-                    badge_y1 = badge_y0 + text_h + 6
-                    badge_x1 = min(w_px - 1, rx0 + text_w + 10)
+                    if ry0 - text_h - 6 >= 0:
+                        badge_y0 = ry0 - text_h - 6
+                        badge_y1 = ry0
+                    else:
+                        badge_y0 = ry1
+                        badge_y1 = min(h_px - 1, ry1 + text_h + 6)
+
+                    badge_x1 = min(w_px - 1, rx0 + text_w + 8)
                     cv2.rectangle(overlay_rgb, (rx0, badge_y0), (badge_x1, badge_y1), box_color, -1)
                     cv2.putText(
                         overlay_rgb,
                         label,
-                        (rx0 + 5, badge_y0 + text_h + 3),
+                        (rx0 + 4, badge_y0 + text_h + 1),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         font_scale,
                         (255, 255, 255),
