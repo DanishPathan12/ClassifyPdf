@@ -143,6 +143,7 @@ class ParsedMetadata:
     has_xmp: bool
     parsed_dates: dict[str, ParsedDateResult] = field(default_factory=dict)
     doc_type: str | None = None
+    page_text_sample: str = ""
 
 
 def parse_date(val: Any) -> ParsedDateResult:
@@ -440,10 +441,22 @@ def extract_metadata(
     file_size: int,
     sha256_hash: str,
     doc_type: str | None = None,
+    page_text_sample: str = "",
 ) -> ParsedMetadata:
     """Extract basic facts, Info dict, and XMP stream, and parse timestamps."""
     pdf_version = str(pdf.pdf_version)
     page_count = len(pdf.pages)
+
+    # Attempt to extract fallback text sample from first page if not already provided
+    if not page_text_sample and len(pdf.pages) > 0:
+        try:
+            p0 = pdf.pages[0]
+            if "/Contents" in p0:
+                raw_c = p0.Contents.read_bytes()
+                words = re.findall(rb"\(([^\)]+)\)", raw_c)
+                page_text_sample = b" ".join(words).decode("latin-1", errors="ignore").lower()
+        except Exception:
+            pass
 
     file_info = FileInfo(
         name=file_name,
@@ -491,6 +504,7 @@ def extract_metadata(
         has_xmp=has_xmp,
         parsed_dates=parsed_dates,
         doc_type=doc_type,
+        page_text_sample=page_text_sample,
     )
 
 
@@ -607,21 +621,71 @@ def check_date_in_future(data: ParsedMetadata) -> list[Finding]:
     return findings
 
 
-def _is_official_document(data: ParsedMetadata) -> bool:
-    """Determine whether the document represents an official record where post-creation modification is a red flag."""
+def _format_tz(minutes: float | None) -> str:
+    """Format timezone offset in minutes to string like '+09:00' or '+00:00'."""
+    if minutes is None:
+        return "+00:00"
+    sign = "+" if minutes >= 0 else "-"
+    total = abs(int(minutes))
+    h, m = divmod(total, 60)
+    return f"{sign}{h:02d}:{m:02d}"
+
+
+def _is_official_document(data: ParsedMetadata) -> tuple[bool, str]:
+    """Determine whether the document represents an official / system-generated record.
+
+    Returns (is_official, reason_or_type).
+    """
     if data.doc_type:
         dt = data.doc_type.lower().strip()
-        if dt in ("official", "receipt", "bank", "invoice", "statement", "id", "bill", "certificate", "government"):
-            return True
+        if dt in ("official", "receipt", "bank", "invoice", "statement", "id", "bill", "certificate", "government", "payslip", "salary", "payroll"):
+            return True, f"explicit document context: {data.doc_type}"
         if dt in ("standard", "resume", "cv", "draft", "report"):
-            return False
+            return False, "standard document context"
 
     fname = data.file_info.name.lower()
     official_keywords = (
-        "receipt", "invoice", "statement", "bill", "bank", "payslip",
-        "salary", "certificate", "tax", "govt", "passport", "license", "challan"
+        "receipt", "invoice", "statement", "bill", "bank", "payslip", "pay_slip",
+        "salary", "certificate", "tax", "govt", "passport", "license", "challan",
+        "utility", "payroll", "voucher", "gst", "epfo", "form16", "w2", "1099"
     )
-    return any(kw in fname for kw in official_keywords)
+    for kw in official_keywords:
+        if kw in fname:
+            return True, f"file naming convention ('{kw}')"
+
+    # Check Title, Subject in Info and XMP
+    title_str = (str(data.info.get("Title", "")) + " " + str(data.xmp.get("dc:title", ""))).lower()
+    subject_str = (str(data.info.get("Subject", "")) + " " + str(data.xmp.get("dc:description", ""))).lower()
+    for kw in official_keywords:
+        if kw in title_str or kw in subject_str:
+            return True, f"document metadata title/subject ('{kw}')"
+
+    # Check Creator / Producer for known automated system generators
+    producer_str = (str(data.info.get("Producer", "")) + " " + str(data.xmp.get("pdf:Producer", ""))).lower()
+    creator_str = (str(data.info.get("Creator", "")) + " " + str(data.xmp.get("xmp:CreatorTool", ""))).lower()
+    system_generator_keywords = (
+        "jasperreports", "reportlab", "itext", "sap", "oracle", "wkhtmltopdf",
+        "birt", "quickbooks", "xero", "stripe", "workday", "adp", "ceridian",
+        "crystal reports", "pdfkit", "weasyprint", "tcpdf", "mpdf", "fpdf"
+    )
+    for kw in system_generator_keywords:
+        if kw in producer_str or kw in creator_str:
+            return True, f"automated system engine ('{kw}')"
+
+    # Check document body text sample if available
+    text_sample = data.page_text_sample.lower() if data.page_text_sample else ""
+    if text_sample:
+        body_official_keywords = (
+            "tax invoice", "invoice #", "invoice no", "payslip", "pay slip", "salary slip",
+            "statement of account", "bank statement", "bill to:", "total amount due",
+            "net pay", "gross pay", "amount payable", "account summary", "payment receipt",
+            "balance due", "gstin", "employee id", "employee no"
+        )
+        for kw in body_official_keywords:
+            if kw in text_sample:
+                return True, f"document text content ('{kw}')"
+
+    return False, "standard document"
 
 
 def check_moddate_differs_creation(data: ParsedMetadata) -> list[Finding]:
@@ -632,7 +696,7 @@ def check_moddate_differs_creation(data: ParsedMetadata) -> list[Finding]:
     - Official / system-generated documents (bank receipts, invoices, IDs): red flag (medium/high severity).
     """
     findings: list[Finding] = []
-    is_official = _is_official_document(data)
+    is_official, doc_reason = _is_official_document(data)
 
     # Check Info
     info_c = data.parsed_dates.get("info:CreationDate")
@@ -646,27 +710,40 @@ def check_moddate_differs_creation(data: ParsedMetadata) -> list[Finding]:
     ):
         diff_sec = (info_m.dt_utc - info_c.dt_utc).total_seconds()
         diff_human = format_seconds_human(diff_sec)
+        orig_tz_str = _format_tz(info_c.tz_offset_minutes)
+        mod_tz_str = _format_tz(info_m.tz_offset_minutes)
+        tz_changed = (
+            info_c.tz_offset_minutes is not None
+            and info_m.tz_offset_minutes is not None
+            and abs(info_c.tz_offset_minutes - info_m.tz_offset_minutes) >= 30
+        )
 
         if is_official:
             findings.append(
                 Finding(
                     id="META_MODDATE_DIFFERS_CREATION",
-                    title="Post-creation modification on official record (Red Flag: ModDate > CreationDate)",
+                    title="Post-creation modification on official record (Major Red Flag: ModDate > CreationDate)",
                     category=Category.SUSPICIOUS,
                     severity=Severity.MEDIUM,
                     explanation=(
-                        f"The modification date is {diff_human} later than the creation date on an official "
-                        "record (bank receipt, invoice, or ID). Official documents should be generated once by "
-                        "an automated system and never re-saved. Any post-creation edit on this document type is "
-                        "a significant red flag."
+                        f"Concrete evidence of post-generation modification: The modification date is {diff_human} later than the creation "
+                        f"date on a system-generated official record ({doc_reason}). Automated billing, payroll, and banking engines emit "
+                        "completed records instantaneously in a single operation (where CreationDate == ModDate). Any subsequent modification "
+                        "or re-saving on an official record is a major red flag indicating post-export alteration."
+                        + (f" Timezone shifted from orig UTC{orig_tz_str} to orig UTC{mod_tz_str}, confirming modification in a different environment." if tz_changed else "")
                     ),
                     evidence={
                         "container": "info",
                         "creation_date": format_human_date(info_c),
                         "mod_date": format_human_date(info_m),
                         "elapsed_time": f"Modified {diff_human} after creation",
+                        "delta_seconds": diff_sec,
+                        "timezone_shift": f"Timezone changed from UTC{orig_tz_str} to UTC{mod_tz_str}" if tz_changed else "Same timezone",
+                        "is_system_generated": True,
+                        "system_document_type": doc_reason,
+                        "concrete_evidence": "Confirmed: Document was altered after initial generation timestamp",
                         "document_type": "official_record",
-                        "verdict_context": "Red flag: official records, receipts, and IDs should not be modified after creation.",
+                        "verdict_context": "Major red flag: system-generated official records (invoices, payslips, bank statements) should not be modified after creation.",
                     },
                 )
             )
@@ -680,18 +757,21 @@ def check_moddate_differs_creation(data: ParsedMetadata) -> list[Finding]:
                     explanation=(
                         f"The modification date is {diff_human} later than the creation date, confirming the document "
                         "was edited or re-saved after initial creation. "
-                        "Forensic context: (1) For resumes, contract drafts, or internal reports, this is 100% normal "
-                        "document workflow. (2) For bank receipts, invoices, or government IDs, any post-creation "
-                        "modification is a red flag."
+                        + (f"Timezone shifted from orig UTC{orig_tz_str} to orig UTC{mod_tz_str}. " if tz_changed else "")
+                        + "Forensic context: (1) For resumes, contract drafts, or internal reports, this is 100% normal "
+                        "document workflow. (2) For bank receipts, invoices, payslips, or government IDs, any post-creation "
+                        "modification is a major red flag."
                     ),
                     evidence={
                         "container": "info",
                         "creation_date": format_human_date(info_c),
                         "mod_date": format_human_date(info_m),
                         "elapsed_time": f"Modified {diff_human} after creation",
+                        "delta_seconds": diff_sec,
+                        "timezone_shift": f"Timezone changed from UTC{orig_tz_str} to UTC{mod_tz_str}" if tz_changed else "Same timezone",
                         "forensic_context": {
                             "resume_or_draft": "100% normal document workflow",
-                            "bank_receipt_or_id": "Red flag: official records should not be modified after creation",
+                            "bank_receipt_or_id": "Major red flag: official records should not be modified after creation",
                         },
                     },
                 )
@@ -709,25 +789,37 @@ def check_moddate_differs_creation(data: ParsedMetadata) -> list[Finding]:
     ):
         diff_sec = (xmp_m.dt_utc - xmp_c.dt_utc).total_seconds()
         diff_human = format_seconds_human(diff_sec)
+        orig_tz_str = _format_tz(xmp_c.tz_offset_minutes)
+        mod_tz_str = _format_tz(xmp_m.tz_offset_minutes)
+        tz_changed = (
+            xmp_c.tz_offset_minutes is not None
+            and xmp_m.tz_offset_minutes is not None
+            and abs(xmp_c.tz_offset_minutes - xmp_m.tz_offset_minutes) >= 30
+        )
 
         if is_official:
             findings.append(
                 Finding(
                     id="META_MODDATE_DIFFERS_CREATION",
-                    title="Post-creation modification on official record in XMP (Red Flag: ModifyDate > CreateDate)",
+                    title="Post-creation modification on official record in XMP (Major Red Flag: ModifyDate > CreateDate)",
                     category=Category.SUSPICIOUS,
                     severity=Severity.MEDIUM,
                     explanation=(
-                        f"The XMP ModifyDate is {diff_human} later than the CreateDate on an official record. "
-                        "Official documents should not have post-creation modifications recorded in XMP metadata."
+                        f"Concrete evidence of post-generation modification in XMP: The XMP ModifyDate is {diff_human} later than the CreateDate "
+                        f"on an official system-generated record ({doc_reason}). Automated billing and payroll engines do not emit post-creation XMP modifications."
+                        + (f" Timezone shifted from orig UTC{orig_tz_str} to orig UTC{mod_tz_str}." if tz_changed else "")
                     ),
                     evidence={
                         "container": "xmp",
                         "create_date": format_human_date(xmp_c),
                         "modify_date": format_human_date(xmp_m),
                         "elapsed_time": f"Modified {diff_human} after creation",
+                        "delta_seconds": diff_sec,
+                        "timezone_shift": f"Timezone changed from UTC{orig_tz_str} to UTC{mod_tz_str}" if tz_changed else "Same timezone",
+                        "is_system_generated": True,
+                        "system_document_type": doc_reason,
                         "document_type": "official_record",
-                        "verdict_context": "Red flag: official records, receipts, and IDs should not be modified after creation.",
+                        "verdict_context": "Major red flag: official records, receipts, payslips, and IDs should not be modified after creation.",
                     },
                 )
             )
@@ -742,16 +834,17 @@ def check_moddate_differs_creation(data: ParsedMetadata) -> list[Finding]:
                         f"The XMP ModifyDate is {diff_human} later than the CreateDate, confirming the document was "
                         "edited after creation. "
                         "Forensic context: (1) For resumes, contract drafts, or internal reports, this is 100% normal. "
-                        "(2) For bank receipts, invoices, or government IDs, any post-creation modification is a red flag."
+                        "(2) For bank receipts, invoices, or government IDs, any post-creation modification is a major red flag."
                     ),
                     evidence={
                         "container": "xmp",
                         "create_date": format_human_date(xmp_c),
                         "modify_date": format_human_date(xmp_m),
                         "elapsed_time": f"Modified {diff_human} after creation",
+                        "delta_seconds": diff_sec,
                         "forensic_context": {
                             "resume_or_draft": "100% normal document workflow",
-                            "bank_receipt_or_id": "Red flag: official records should not be modified after creation",
+                            "bank_receipt_or_id": "Major red flag: official records should not be modified after creation",
                         },
                     },
                 )
@@ -1552,6 +1645,7 @@ def extract_image_metadata(
         has_xmp=has_xmp,
         parsed_dates=parsed_dates,
         doc_type=doc_type,
+        page_text_sample="",
     )
 
 

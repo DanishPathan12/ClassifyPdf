@@ -441,7 +441,34 @@ def build_non_technical_summary(
     has_editing_tool = "META_KNOWN_EDITING_TOOL" in finding_codes
     has_orphan_stream = "STREAM_UNREFERENCED_ORPHAN_OBJECTS" in finding_codes
 
-    if has_rev_text_change:
+    # Check for official document post-creation modification (Major Red Flag)
+    mod_diff_finding = next(
+        (f for f in findings_list if getattr(f, "code", getattr(f, "id", "")) == "META_MODDATE_DIFFERS_CREATION"),
+        None,
+    )
+    is_official_mod_flag = False
+    diff_human_str = ""
+    if mod_diff_finding:
+        title_str = getattr(mod_diff_finding, "title", "")
+        sev_str = str(getattr(mod_diff_finding, "severity", "")).lower()
+        if "red flag" in title_str.lower() or sev_str in ("medium", "high", "severity.medium", "severity.high"):
+            is_official_mod_flag = True
+            ev = getattr(mod_diff_finding, "evidence", {})
+            if isinstance(ev, dict) and "elapsed_time" in ev:
+                diff_human_str = str(ev["elapsed_time"])
+
+    if is_official_mod_flag:
+        check_dates = NonTechnicalCheck(
+            name="Document History & Dates",
+            status="warning",
+            headline="Post-Creation Modification (Major Red Flag on System Document)",
+            detail=(
+                f"This system-generated document (such as an invoice, payslip, or statement) was modified after creation "
+                f"({diff_human_str or 'subsequent to initial export'}). Automated billing and payroll systems generate completed documents "
+                "in a single operation; post-creation modification is concrete evidence of alteration."
+            ),
+        )
+    elif has_rev_text_change:
         check_dates = NonTechnicalCheck(
             name="Document History & Revisions",
             status="warning",
@@ -525,6 +552,13 @@ def build_non_technical_summary(
             explanation = (
                 "This document was digitally signed, but content was modified after signing, breaking the digital authenticity seal."
             )
+        elif is_official_mod_flag:
+            explanation = (
+                f"This document is an official or system-generated record (such as an invoice, payslip, or statement) "
+                f"with concrete evidence of post-generation modification ({diff_human_str or 'modified after initial creation'}). "
+                "Automated billing and payroll engines produce records in a single step; any post-creation modification "
+                "is a major red flag indicating post-export alteration."
+            )
         else:
             explanation = (
                 "Multiple structural and visual anomalies indicate that portions of this document have been altered "
@@ -539,11 +573,19 @@ def build_non_technical_summary(
         is_proper = None
         verdict_label = "Caution: Suspicious Inconsistencies Found"
         verdict_color = "amber"
-        headline = "Some unusual formatting or timeline inconsistencies warrant review."
-        explanation = (
-            "We detected minor anomalies such as overlapping text lines or re-saving traces. "
-            "While these can occasionally occur in complex document templates, they may also indicate manual adjustments."
-        )
+        if is_official_mod_flag:
+            headline = "Post-creation modification detected on official record."
+            explanation = (
+                f"This document is an official record (invoice/payslip/statement) with concrete metadata evidence of modification "
+                f"after its creation date ({diff_human_str or 'subsequent to creation'}). "
+                "System-generated documents should not be modified after initial creation."
+            )
+        else:
+            headline = "Some unusual formatting or timeline inconsistencies warrant review."
+            explanation = (
+                "We detected minor anomalies such as overlapping text lines or re-saving traces. "
+                "While these can occasionally occur in complex document templates, they may also indicate manual adjustments."
+            )
         trust_recommendation = (
             "Review the highlighted areas on the visual page preview. Before taking critical action, "
             "verify key terms or totals with the sender."

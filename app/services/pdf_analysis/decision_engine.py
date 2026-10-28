@@ -12,18 +12,24 @@ from app.services.pdf_analysis.pdf_loader import LoadedPdf
 logger = logging.getLogger("pdf_analyser.decision_engine")
 
 # Strong indicators that independently establish credible modification evidence
-STRONG_INDICATOR_CODES = frozenset({
+# Definitive cryptographic and direct original-verification proofs (factual breach, 100% confidence)
+CONFIRMED_EVIDENCE_CODES = frozenset({
     "SIG_POST_SIGNING_MODIFICATION",
     "SIG_CRYPTO_DIGEST_INVALID",
-    "REV_CRITICAL_OBJECT_REPLACED",
-    "REV_TEXT_CHANGE_DETECTED",
     "VERIFY_ORIGINAL_DIFF_DETECTED",
     "VERIFY_REFERENCE_HASH_MISMATCH",
+})
+
+# Strong internal structural/revision indicators
+STRONG_INDICATOR_CODES = frozenset({
+    "REV_CRITICAL_OBJECT_REPLACED",
+    "REV_TEXT_CHANGE_DETECTED",
 })
 
 # Moderate indicators that require independent correlation
 MODERATE_INDICATOR_CODES = frozenset({
     "META_MODDATE_BEFORE_CREATION",
+    "META_MODDATE_DIFFERS_CREATION",
     "STREAM_UNREFERENCED_ORPHAN_OBJECTS",
     "STREAM_DANGLING_FONT_REFERENCE",
     "REV_XREF_OFFSET_OUT_OF_BOUNDS",
@@ -145,11 +151,17 @@ def evaluate_forensic_evidence(
         )
 
     # 2. Filter findings into strength tiers and categorize by domain
+    confirmed_findings = [f for f in all_findings if f.code in CONFIRMED_EVIDENCE_CODES]
     strong_findings = [f for f in all_findings if f.code in STRONG_INDICATOR_CODES]
     moderate_findings = [f for f in all_findings if f.code in MODERATE_INDICATOR_CODES]
     weak_findings = [
         f for f in all_findings
-        if f.code in WEAK_INDICATOR_CODES or (f.code not in STRONG_INDICATOR_CODES and f.code not in MODERATE_INDICATOR_CODES and f.severity in ("low", "medium"))
+        if f.code in WEAK_INDICATOR_CODES or (
+            f.code not in CONFIRMED_EVIDENCE_CODES
+            and f.code not in STRONG_INDICATOR_CODES
+            and f.code not in MODERATE_INDICATOR_CODES
+            and f.severity in ("low", "medium")
+        )
     ]
 
     # Group domains that produced non-info findings
@@ -160,10 +172,35 @@ def evaluate_forensic_evidence(
             domains_with_evidence.add(f_dom)
 
     # 3. Decision Rules
-    # Rule A: Strong indicator present
+    # Rule A: Definitive Cryptographic or Reference Verification Proof (100% Certainty)
+    if confirmed_findings:
+        top_confirmed = confirmed_findings[0]
+        conf = 1.0  # 100% concrete mathematical/cryptographic fact
+        summary = (
+            f"Confirmed cryptographic or reference integrity failure: "
+            f"{top_confirmed.description}."
+        )
+        return DecisionOutcome(
+            verdict=ForensicVerdict.LIKELY_EDITED.value,
+            edit_detected=True,
+            confidence=conf,
+            summary=summary,
+            analysis_status="completed",
+            checks=checks,
+            limitations=limitations,
+            all_findings=all_findings,
+            assessment_status="confirmed_integrity_failure",
+            score_explanation=f"Score 1.0 (100%): Concrete verifiable evidence ({top_confirmed.code}) establishes that document integrity was breached.",
+            recommended_next_steps=[
+                "Inspect specific signed byte ranges or modified pages highlighted in the verification report.",
+                "Request a freshly issued and digitally signed copy from the authorized originator.",
+                "Compare against an authenticated archival record before relying on document contents.",
+            ],
+        )
+
+    # Rule B: Strong internal structural / revision indicators
     if strong_findings:
         top_strong = strong_findings[0]
-        # Calculate calibrated confidence: strong base 0.85 + small boost if multiple domains confirm
         conf = min(0.95, 0.85 + (0.05 if len(domains_with_evidence) > 1 else 0.0) + (0.05 if len(strong_findings) > 1 else 0.0))
         conf = round(conf, 2)
         summary = (
@@ -183,9 +220,8 @@ def evaluate_forensic_evidence(
             assessment_status="confirmed_integrity_failure",
             score_explanation=f"Score {conf}: Strong verifiable finding ({top_strong.code}) establishes that document integrity was breached.",
             recommended_next_steps=[
-                "Inspect specific signed byte ranges or modified pages highlighted in the verification report.",
-                "Request a freshly issued and digitally signed copy from the authorized originator.",
-                "Compare against an authenticated archival record before relying on document contents.",
+                "Inspect differences between the historical revision and current revision to verify authorization.",
+                "Request an authenticated original directly from the issuing party.",
             ],
         )
 

@@ -46,7 +46,14 @@ def _convert_metadata_finding_to_forensic(f: Finding) -> ForensicFinding:
     cat_val = getattr(f.category, "value", str(f.category))
     sev_val = getattr(f.severity, "value", str(f.severity))
 
-    if code == "META_MODDATE_BEFORE_CREATION":
+    if code == "META_MODDATE_DIFFERS_CREATION":
+        if "red flag" in f.title.lower() or sev_val in ("medium", "high"):
+            conf = 0.75
+            sev = sev_val
+        else:
+            conf = 0.20
+            sev = "info"
+    elif code == "META_MODDATE_BEFORE_CREATION":
         conf = 0.55
         sev = "medium"
     elif code == "META_INFO_XMP_MISMATCH":
@@ -115,6 +122,15 @@ def run_pdf_analysis(
 
     if loaded_pdf.is_valid:
         try:
+            page_text_sample = ""
+            try:
+                import fitz
+                with fitz.open(stream=loaded_pdf.file_bytes, filetype="pdf") as f_doc:
+                    if len(f_doc) > 0:
+                        page_text_sample = f_doc[0].get_text("text")[:2000].lower()
+            except Exception:
+                pass
+
             with pikepdf.Pdf.open(io.BytesIO(loaded_pdf.file_bytes)) as pdf:
                 parsed_data = extract_metadata(
                     pdf=pdf,
@@ -122,6 +138,7 @@ def run_pdf_analysis(
                     file_size=loaded_pdf.file_size,
                     sha256_hash=loaded_pdf.sha256,
                     doc_type=doc_type,
+                    page_text_sample=page_text_sample,
                 )
             metadata_findings = run_all_checks(parsed_data)
             metadata_container = MetadataContainer(

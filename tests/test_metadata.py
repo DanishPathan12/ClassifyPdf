@@ -466,3 +466,31 @@ def test_check_execution_error_isolation(monkeypatch: pytest.MonkeyPatch) -> Non
     error_finding = next(f for f in data["findings"] if f["id"] == "META_CHECK_EXECUTION_ERROR")
     assert error_finding["category"] == Category.INCONCLUSIVE.value
     assert "Simulated internal check failure" in error_finding["evidence"]["error"]
+
+
+def test_moddate_differs_creation_payslip_invoice_major_red_flag() -> None:
+    """Test that ModDate > CreationDate with timezone shift on payslips/invoices is flagged as a Major Red Flag."""
+    pdf_bytes = make_valid_pdf(
+        creation_date="D:20240123003922+09'00'",
+        mod_date="D:20261027110445+01'00'",
+    )
+    # Uploaded as salary payslip
+    response = client.post(
+        "/analyze",
+        files={"file": ("October_Payslip_2026.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    finding = next(f for f in data["findings"] if f["id"] == "META_MODDATE_DIFFERS_CREATION")
+    assert "Major Red Flag" in finding["title"]
+    assert "Concrete evidence of post-generation modification" in finding["explanation"]
+    assert "UTC+09:00" in finding["explanation"] or "UTC+09:00" in finding["evidence"].get("timezone_shift", "")
+    assert finding["evidence"]["is_system_generated"] is True
+
+    # Check non-technical summary
+    non_tech = data.get("non_technical_summary", {})
+    history_check = next((c for c in non_tech.get("checks", []) if "History" in c["name"]), None)
+    assert history_check is not None
+    assert history_check["status"] == "warning"
+    assert "Major Red Flag" in history_check["headline"]
