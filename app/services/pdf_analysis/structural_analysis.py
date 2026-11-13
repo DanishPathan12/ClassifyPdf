@@ -61,6 +61,214 @@ class TextSpanRecord:
     line_idx: int = 0
     is_in_table: bool = False
     is_highlighted: bool = False
+    stream_idx: int = 1
+
+
+@dataclass
+class StreamTextOperatorRecord:
+    stream_index: int  # 1-based (1 = primary stream, 2, 3, 4, 5... = appended streams)
+    stream_obj_num: int | None
+    operator: str  # Tj, TJ, ', "
+    text: str
+    x: float | None = None
+    y: float | None = None  # in PDF coordinates (bottom-left origin)
+    font_name: str | None = None
+    font_size: float | None = None
+    kerning_offsets: list[float] = field(default_factory=list)
+
+
+def _parse_stream_text_operators(
+    stream_obj: Any,
+    stream_index: int,
+    stream_obj_num: int | None,
+    raw_bytes: bytes | None = None,
+) -> list[StreamTextOperatorRecord]:
+    """Extract individual text operators (Tj, TJ, ', \") and track coordinates from a content stream."""
+    records: list[StreamTextOperatorRecord] = []
+
+    # 1. Primary parser: pikepdf parse_content_stream
+    if stream_obj is not None:
+        try:
+            ops = pikepdf.parse_content_stream(stream_obj)
+            cur_font: str | None = None
+            cur_size: float | None = None
+            leading: float = 0.0
+            tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            tlm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
+            for op in ops:
+                op_name = str(op.operator)
+                operands = list(op.operands)
+
+                if op_name == "BT":
+                    tm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+                    tlm = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+                    leading = 0.0
+                elif op_name == "Tf":
+                    if len(operands) >= 2:
+                        cur_font = str(operands[0]).lstrip("/")
+                        try:
+                            cur_size = float(operands[1])
+                        except Exception:
+                            cur_size = 10.0
+                elif op_name == "TL":
+                    if len(operands) >= 1:
+                        try:
+                            leading = float(operands[0])
+                        except Exception:
+                            pass
+                elif op_name == "Td":
+                    if len(operands) >= 2:
+                        try:
+                            dx = float(operands[0])
+                            dy = float(operands[1])
+                            tlm[4] += dx
+                            tlm[5] += dy
+                            tm = list(tlm)
+                        except Exception:
+                            pass
+                elif op_name == "TD":
+                    if len(operands) >= 2:
+                        try:
+                            dx = float(operands[0])
+                            dy = float(operands[1])
+                            leading = -dy
+                            tlm[4] += dx
+                            tlm[5] += dy
+                            tm = list(tlm)
+                        except Exception:
+                            pass
+                elif op_name == "Tm":
+                    if len(operands) >= 6:
+                        try:
+                            tm = [float(operands[i]) for i in range(6)]
+                            tlm = list(tm)
+                        except Exception:
+                            pass
+                elif op_name == "T*":
+                    tlm[5] -= leading
+                    tm = list(tlm)
+                elif op_name == "Tj":
+                    if len(operands) >= 1:
+                        txt = str(operands[0])
+                        if txt:
+                            records.append(
+                                StreamTextOperatorRecord(
+                                    stream_index=stream_index,
+                                    stream_obj_num=stream_obj_num,
+                                    operator="Tj",
+                                    text=txt,
+                                    x=round(tm[4], 2),
+                                    y=round(tm[5], 2),
+                                    font_name=cur_font,
+                                    font_size=cur_size,
+                                )
+                            )
+                elif op_name == "TJ":
+                    if len(operands) >= 1 and isinstance(operands[0], (pikepdf.Array, list)):
+                        fragments: list[str] = []
+                        kernings: list[float] = []
+                        for item in operands[0]:
+                            if isinstance(item, (int, float)):
+                                kernings.append(float(item))
+                            elif isinstance(item, (pikepdf.String, str)):
+                                fragments.append(str(item))
+                            else:
+                                fragments.append(str(item))
+                        full_txt = "".join(fragments)
+                        if full_txt:
+                            records.append(
+                                StreamTextOperatorRecord(
+                                    stream_index=stream_index,
+                                    stream_obj_num=stream_obj_num,
+                                    operator="TJ",
+                                    text=full_txt,
+                                    x=round(tm[4], 2),
+                                    y=round(tm[5], 2),
+                                    font_name=cur_font,
+                                    font_size=cur_size,
+                                    kerning_offsets=kernings,
+                                )
+                            )
+                elif op_name == "'":
+                    tlm[5] -= leading
+                    tm = list(tlm)
+                    if len(operands) >= 1:
+                        txt = str(operands[0])
+                        if txt:
+                            records.append(
+                                StreamTextOperatorRecord(
+                                    stream_index=stream_index,
+                                    stream_obj_num=stream_obj_num,
+                                    operator="'",
+                                    text=txt,
+                                    x=round(tm[4], 2),
+                                    y=round(tm[5], 2),
+                                    font_name=cur_font,
+                                    font_size=cur_size,
+                                )
+                            )
+                elif op_name == "\"":
+                    if len(operands) >= 3:
+                        tlm[5] -= leading
+                        tm = list(tlm)
+                        txt = str(operands[2])
+                        if txt:
+                            records.append(
+                                StreamTextOperatorRecord(
+                                    stream_index=stream_index,
+                                    stream_obj_num=stream_obj_num,
+                                    operator="\"",
+                                    text=txt,
+                                    x=round(tm[4], 2),
+                                    y=round(tm[5], 2),
+                                    font_name=cur_font,
+                                    font_size=cur_size,
+                                )
+                            )
+            return records
+        except Exception as e:
+            logger.debug("pikepdf stream operator parsing note: %s", e)
+
+    # 2. Resilient fallback parser: regex over raw bytes
+    if raw_bytes:
+        try:
+            for m in re.finditer(rb"\((.*?)\)\s*Tj", raw_bytes):
+                try:
+                    txt = m.group(1).decode("latin1", errors="ignore")
+                    if txt:
+                        records.append(
+                            StreamTextOperatorRecord(
+                                stream_index=stream_index,
+                                stream_obj_num=stream_obj_num,
+                                operator="Tj",
+                                text=txt,
+                            )
+                        )
+                except Exception:
+                    pass
+            for m in re.finditer(rb"\[(.*?)\]\s*TJ", raw_bytes):
+                try:
+                    inside = m.group(1)
+                    sub_str = re.findall(rb"\((.*?)\)", inside)
+                    txt = "".join(s.decode("latin1", errors="ignore") for s in sub_str)
+                    kernings = [float(k) for k in re.findall(rb"([\d\.\-]+)", inside) if not k.startswith(b"(")]
+                    if txt:
+                        records.append(
+                            StreamTextOperatorRecord(
+                                stream_index=stream_index,
+                                stream_obj_num=stream_obj_num,
+                                operator="TJ",
+                                text=txt,
+                                kerning_offsets=kernings,
+                            )
+                        )
+                except Exception:
+                    pass
+        except Exception as re_err:
+            logger.debug("regex stream text fallback note: %s", re_err)
+
+    return records
 
 
 @dataclass
@@ -232,6 +440,7 @@ def analyze_structural_layer(
             has_recoverable_revisions=has_revs,
         )
 
+    pikepdf_doc: pikepdf.Pdf | None = None
     try:
         doc = fitz.open(stream=loaded_pdf.file_bytes, filetype="pdf")
     except Exception as doc_err:
@@ -242,6 +451,11 @@ def analyze_structural_layer(
             findings=findings,
             limitations=limitations,
         )
+
+    try:
+        pikepdf_doc = pikepdf.Pdf.open(io.BytesIO(loaded_pdf.file_bytes))
+    except Exception as pike_init_err:
+        logger.debug("pikepdf open note in structural analysis: %s", pike_init_err)
 
     try:
         # Pre-pass: Document-wide font family distribution to determine the genuine primary palette
@@ -653,15 +867,36 @@ def analyze_structural_layer(
                                 )
                             )
 
-                # 9. Check F: Appended Secondary Content Streams with Text
+                # 9. Check F: Appended Secondary Content Streams with Text & Stream-Origin Heuristic
                 try:
                     c_xrefs = page.get_contents()
-                    if isinstance(c_xrefs, (list, tuple)) and len(c_xrefs) > 1:
-                        appended_text_streams = []
-                        for idx in range(1, len(c_xrefs)):
-                            s_bytes = doc.xref_stream(c_xrefs[idx])
-                            if (b"Tj" in s_bytes) or (b"TJ" in s_bytes) or (b"'" in s_bytes) or (b'"' in s_bytes):
-                                appended_text_streams.append(idx + 1)
+                    if not isinstance(c_xrefs, (list, tuple)):
+                        c_xrefs = [c_xrefs] if c_xrefs else []
+
+                    if len(c_xrefs) > 1:
+                        # Extract operators from each content stream separately
+                        pikepdf_page = pikepdf_doc.pages[page_idx] if (pikepdf_doc and page_idx < len(pikepdf_doc.pages)) else None
+                        pike_streams = list(pikepdf_page.Contents) if (pikepdf_page and isinstance(pikepdf_page.Contents, pikepdf.Array)) else []
+
+                        all_stream_ops: list[list[StreamTextOperatorRecord]] = []
+                        appended_text_streams: list[int] = []
+
+                        for s_idx in range(len(c_xrefs)):
+                            s_num = s_idx + 1
+                            s_xref = c_xrefs[s_idx]
+                            s_bytes = doc.xref_stream(s_xref) if s_xref else b""
+                            pike_s = pike_streams[s_idx] if s_idx < len(pike_streams) else None
+                            s_oid = getattr(pike_s, "objgen", (s_xref, 0))[0] if pike_s else s_xref
+                            s_ops = _parse_stream_text_operators(
+                                stream_obj=pike_s,
+                                stream_index=s_num,
+                                stream_obj_num=s_oid,
+                                raw_bytes=s_bytes,
+                            )
+                            all_stream_ops.append(s_ops)
+                            if s_idx > 0 and any(op.text.strip() for op in s_ops):
+                                appended_text_streams.append(s_num)
+
                         if appended_text_streams and not any(
                             f.code == "STREAM_APPENDED_CONTENT_STREAM_TEXT" and f.evidence.get("page") == page_num
                             for f in findings
@@ -691,8 +926,262 @@ def analyze_structural_layer(
                                     recommended_action="Review text on this page to identify overlayed content.",
                                 )
                             )
+
+                        # Stream 1 baseline spans
+                        stream1_spans: list[TextSpanRecord] = []
+                        for sp in page_spans:
+                            if getattr(sp, "stream_idx", 1) == 1:
+                                stream1_spans.append(sp)
+
+                        # Map appended stream operators to exact text spans & bounding boxes
+                        for s_idx in range(1, len(all_stream_ops)):
+                            s_num = s_idx + 1
+                            app_ops = all_stream_ops[s_idx]
+                            for op in app_ops:
+                                txt_stripped = op.text.strip()
+                                if not txt_stripped:
+                                    continue
+
+                                # Match against visible page spans
+                                matched_span: TextSpanRecord | None = None
+                                best_dist = float("inf")
+                                for sp in page_spans:
+                                    sp_txt = sp.text.strip()
+                                    if txt_stripped == sp_txt or txt_stripped in sp_txt or sp_txt in txt_stripped:
+                                        if op.x is not None and op.y is not None:
+                                            exp_y = page.rect.height - op.y
+                                            dist = abs(sp.bbox[0] - op.x) + abs(sp.bbox[3] - exp_y)
+                                            if dist < best_dist:
+                                                best_dist = dist
+                                                matched_span = sp
+                                        elif matched_span is None:
+                                            matched_span = sp
+
+                                if matched_span is not None:
+                                    matched_span.stream_idx = s_num
+                                    target_bbox = matched_span.bbox
+                                else:
+                                    # Calculate fallback bounding box from stream coordinates
+                                    op_x = op.x if op.x is not None else 72.0
+                                    f_sz = op.font_size or 11.0
+                                    op_y = op.y if op.y is not None else (page.rect.height - 72.0)
+                                    top_y = max(0.0, page.rect.height - op_y - f_sz)
+                                    bot_y = page.rect.height - op_y + 2.0
+                                    w_est = len(txt_stripped) * f_sz * 0.55
+                                    target_bbox = [round(op_x, 2), round(top_y, 2), round(op_x + w_est, 2), round(bot_y, 2)]
+
+                                # 1. Flag exactly which string comes from appended stream
+                                findings.append(
+                                    ForensicFinding(
+                                        code="STREAM_APPENDED_STREAM_TEXT_SPAN",
+                                        category="possible_text_insertion",
+                                        domain="content_stream",
+                                        severity="high",
+                                        confidence=0.85,
+                                        anomaly_confidence=0.95,
+                                        tampering_confidence=0.80,
+                                        description=(
+                                            f"Page {page_num} renders text '{txt_stripped}' from appended content stream {s_num} "
+                                            f"of {len(c_xrefs)} at {target_bbox}."
+                                        ),
+                                        evidence={
+                                            "page": page_num,
+                                            "stream_index": s_num,
+                                            "total_streams": len(c_xrefs),
+                                            "text": txt_stripped,
+                                            "bbox": target_bbox,
+                                            "font": op.font_name,
+                                        },
+                                        limitations=[
+                                            "Watermarking software, header/footer stamp utilities, and print drivers legitimately append content streams.",
+                                        ],
+                                        alternative_explanations=[
+                                            "Document management system watermark or automated stamp layer.",
+                                        ],
+                                        recommended_action="Inspect visual overlay to verify origin of text in appended stream.",
+                                    )
+                                )
+
+                                # 2. Stream-origin heuristic: text in later stream sitting on baseline of stream 1 text
+                                for s1_sp in stream1_spans:
+                                    same_baseline = (
+                                        abs(target_bbox[1] - s1_sp.bbox[1]) <= 4.0
+                                        or abs(target_bbox[3] - s1_sp.bbox[3]) <= 4.0
+                                        or (s1_sp.line_bbox and _boxes_overlap(target_bbox, s1_sp.line_bbox, min_overlap_ratio=0.10))
+                                    )
+                                    if same_baseline and s1_sp.text.strip() != txt_stripped:
+                                        findings.append(
+                                            ForensicFinding(
+                                                code="STREAM_TEXT_INSERTION_ON_BASELINE",
+                                                category="possible_text_insertion",
+                                                domain="content_stream",
+                                                severity="high",
+                                                confidence=0.90,
+                                                anomaly_confidence=0.98,
+                                                tampering_confidence=0.90,
+                                                description=(
+                                                    f"Page {page_num} contains text '{txt_stripped}' from appended content stream {s_num} "
+                                                    f"inserted on the same baseline as stream 1 text ('{s1_sp.text}') at {target_bbox}."
+                                                ),
+                                                evidence={
+                                                    "page": page_num,
+                                                    "inserted_text": txt_stripped,
+                                                    "stream_index": s_num,
+                                                    "stream1_text": s1_sp.text,
+                                                    "baseline_y": round(target_bbox[3], 2),
+                                                    "bbox": target_bbox,
+                                                    "stream1_bbox": s1_sp.bbox,
+                                                },
+                                                limitations=[
+                                                    "Form filling tools and modular template engines sometimes compile field values in separate streams.",
+                                                ],
+                                                alternative_explanations=[
+                                                    "Multi-stream templating engine assembling tabular forms.",
+                                                ],
+                                                recommended_action="Inspect the inserted text to verify if figures or names were modified.",
+                                            )
+                                        )
+                                        break
+
+                        # 3. Object-number analysis: orphan objects + higher-numbered content stream
+                        if pikepdf_page is not None and isinstance(pikepdf_page.Contents, pikepdf.Array):
+                            s_oids = [int(s.objgen[0]) for s in pikepdf_page.Contents if hasattr(s, "objgen")]
+                            if len(s_oids) >= 2:
+                                base_oid = s_oids[0]
+                                page_oid = int(pikepdf_page.objgen[0]) if hasattr(pikepdf_page, "objgen") else base_oid
+                                orphan_cnt = stream_outcome.unreferenced_objects_count
+                                for k_idx in range(1, len(s_oids)):
+                                    app_oid = s_oids[k_idx]
+                                    gap_oid = app_oid - base_oid
+                                    if orphan_cnt > 0 and gap_oid >= 5:
+                                        findings.append(
+                                            ForensicFinding(
+                                                code="STRUCT_LATE_ADDITION_OBJECT_NUMBER",
+                                                category="possible_text_insertion",
+                                                domain="content_stream",
+                                                severity="high" if orphan_cnt > 0 else "medium",
+                                                confidence=0.80,
+                                                anomaly_confidence=0.90,
+                                                tampering_confidence=0.75,
+                                                description=(
+                                                    f"Page {page_num} contains appended content stream obj #{app_oid} "
+                                                    f"(gap: +{gap_oid} above base stream obj #{base_oid}, page obj #{page_oid}) "
+                                                    f"alongside {orphan_cnt} unreferenced orphan object(s), indicating late structural additions."
+                                                ),
+                                                evidence={
+                                                    "page": page_num,
+                                                    "page_obj_num": page_oid,
+                                                    "base_stream_obj_num": base_oid,
+                                                    "appended_stream_obj_num": app_oid,
+                                                    "gap": gap_oid,
+                                                    "orphan_count": orphan_cnt,
+                                                    "bbox": [72.0, 72.0, round(page.rect.width - 72.0, 1), round(page.rect.height - 72.0, 1)],
+                                                },
+                                                limitations=[
+                                                    "Certain PDF compilers assign object numbers non-sequentially during document generation.",
+                                                ],
+                                                alternative_explanations=[
+                                                    "Non-sequential PDF compiler assigning object IDs.",
+                                                ],
+                                                recommended_action="Correlate with revision history to verify when the stream was introduced.",
+                                            )
+                                        )
                 except Exception as stream_check_err:
                     logger.debug("Page stream check note: %s", stream_check_err)
+
+                # 9b. Check: Line Fragmentation
+                try:
+                    line_groups: dict[int, list[TextSpanRecord]] = {}
+                    for sp in visible_spans:
+                        if _is_subheading_or_label(sp) or sp.font_size >= 16.0 or sp.is_highlighted:
+                            continue
+                        y_key = int(round(sp.bbox[3] / 3.0)) * 3
+                        line_groups.setdefault(y_key, []).append(sp)
+
+                    for y_key, l_spans in line_groups.items():
+                        if len(l_spans) < 2:
+                            continue
+                        l_spans_sorted = sorted(l_spans, key=lambda s: s.bbox[0])
+                        for j in range(1, len(l_spans_sorted)):
+                            prev_sp = l_spans_sorted[j - 1]
+                            curr_sp = l_spans_sorted[j]
+                            gap = curr_sp.bbox[0] - prev_sp.bbox[2]
+                            cross_stream = getattr(curr_sp, "stream_idx", 1) != getattr(prev_sp, "stream_idx", 1)
+                            is_overlap = gap < -0.5
+                            is_short_frag = (len(curr_sp.text.strip()) <= 4 or len(prev_sp.text.strip()) <= 4) and (-2.0 <= gap <= 6.0)
+                            is_micro_offset = (0.0 <= gap <= 1.8) and not curr_sp.text.startswith(" ") and not prev_sp.text.endswith(" ")
+
+                            if cross_stream:
+                                frag_bbox = curr_sp.bbox
+                                findings.append(
+                                    ForensicFinding(
+                                        code="STRUCT_LINE_FRAGMENTATION",
+                                        category="possible_text_insertion",
+                                        domain="layout_analysis",
+                                        severity="high",
+                                        confidence=0.75,
+                                        anomaly_confidence=0.90,
+                                        tampering_confidence=0.70,
+                                        description=(
+                                            f"Page {page_num} line '{prev_sp.text} {curr_sp.text}' exhibits line fragmentation: "
+                                            f"split into separate text runs across different content streams with anomalous x-offset "
+                                            f"(gap: {round(gap, 2)} pt, fragment: '{curr_sp.text}') at {frag_bbox}."
+                                        ),
+                                        evidence={
+                                            "page": page_num,
+                                            "line_text": f"{prev_sp.text} {curr_sp.text}",
+                                            "prev_text": prev_sp.text,
+                                            "fragment": curr_sp.text,
+                                            "gap": round(gap, 2),
+                                            "cross_stream": cross_stream,
+                                            "bbox": frag_bbox,
+                                        },
+                                        limitations=[
+                                            "Complex desktop publishing typesetting, tight justified kerning, or drop caps.",
+                                        ],
+                                        alternative_explanations=[
+                                            "Desktop publishing kerning variation.",
+                                        ],
+                                        recommended_action="Inspect the fragmented line to check whether numbers or terms were inserted.",
+                                    )
+                                )
+                                break
+                            elif (is_short_frag and gap < 2.0 and not is_overlap) or is_micro_offset:
+                                frag_bbox = curr_sp.bbox
+                                findings.append(
+                                    ForensicFinding(
+                                        code="STRUCT_LINE_FRAGMENTATION",
+                                        category="formatting_anomaly",
+                                        domain="layout_analysis",
+                                        severity="low",
+                                        confidence=0.30,
+                                        anomaly_confidence=0.75,
+                                        tampering_confidence=0.30,
+                                        description=(
+                                            f"Page {page_num} line '{prev_sp.text} {curr_sp.text}' exhibits minor run spacing differences "
+                                            f"(gap: {round(gap, 2)} pt, fragment: '{curr_sp.text}') at {frag_bbox}."
+                                        ),
+                                        evidence={
+                                            "page": page_num,
+                                            "line_text": f"{prev_sp.text} {curr_sp.text}",
+                                            "prev_text": prev_sp.text,
+                                            "fragment": curr_sp.text,
+                                            "gap": round(gap, 2),
+                                            "cross_stream": False,
+                                            "bbox": frag_bbox,
+                                        },
+                                        limitations=[
+                                            "Complex desktop publishing typesetting, tight justified kerning, or font glyph metrics.",
+                                        ],
+                                        alternative_explanations=[
+                                            "Desktop publishing kerning variation.",
+                                        ],
+                                        recommended_action="Inspect text in document context.",
+                                    )
+                                )
+                                break
+                except Exception as frag_err:
+                    logger.debug("Line fragmentation audit note: %s", frag_err)
 
                 # 10. Check G: Context-Aware Formatting Consistency (excluding legitimate subheadings)
                 if len(visible_spans) >= 5:
@@ -1011,11 +1500,67 @@ def analyze_structural_layer(
             except Exception as orig_diff_err:
                 logger.debug("Exact structural original diff note: %s", orig_diff_err)
 
+        # 15. Check Producer and Metadata against Content Streams
+        if pikepdf_doc is not None:
+            try:
+                info_d = getattr(pikepdf_doc, "docinfo", {})
+                prod_s = str(info_d.get("/Producer", "")) if info_d else ""
+                creat_s = str(info_d.get("/Creator", "")) if info_d else ""
+                combined_meta = (prod_s + " " + creat_s).lower()
+                editor_tools = ("sejda", "ilovepdf", "smallpdf", "pdfescape", "foxit", "nitro", "canva", "pdffiller", "pdf24", "pdfcreator", "preview")
+                matched_ed = next((t for t in editor_tools if t in combined_meta), None)
+                if matched_ed:
+                    app_pages = [
+                        f.evidence.get("page")
+                        for f in findings
+                        if f.code in ("STREAM_APPENDED_CONTENT_STREAM_TEXT", "STREAM_APPENDED_STREAM_TEXT_SPAN")
+                        and isinstance(f.evidence, dict)
+                        and "page" in f.evidence
+                    ]
+                    app_pages = sorted(list(set(p for p in app_pages if p is not None)))
+                    if app_pages:
+                        findings.append(
+                            ForensicFinding(
+                                code="META_EDITOR_PRODUCER_WITH_APPENDED_STREAM",
+                                category="suspicious",
+                                domain="metadata",
+                                severity="high",
+                                confidence=0.85,
+                                anomaly_confidence=0.95,
+                                tampering_confidence=0.85,
+                                description=(
+                                    f"Document metadata specifies editor tool '{matched_ed.capitalize()}' "
+                                    f"(Producer: '{prod_s}', Creator: '{creat_s}') combined with appended content streams "
+                                    f"on page(s) {app_pages}, strongly corroborating external post-creation editing."
+                                ),
+                                evidence={
+                                    "producer": prod_s,
+                                    "creator": creat_s,
+                                    "detected_editor": matched_ed,
+                                    "appended_pages": app_pages,
+                                },
+                                limitations=[
+                                    "Document was converted, compressed, or stamped by an authorized online tool without malicious intent.",
+                                ],
+                                alternative_explanations=[
+                                    "Document was compressed or processed by online utility without content alteration.",
+                                ],
+                                recommended_action="Inspect flagged pages to verify if unauthorized text was added.",
+                            )
+                        )
+            except Exception as meta_err:
+                logger.debug("Producer and metadata check note: %s", meta_err)
+
     finally:
         try:
             doc.close()
         except Exception:
             pass
+        if pikepdf_doc is not None:
+            try:
+                pikepdf_doc.close()
+            except Exception:
+                pass
 
     # Calculate granular counts for enhanced text tampering audit
     formatting_count = sum(1 for f in findings if f.category == "formatting_anomaly")
@@ -1034,6 +1579,10 @@ def analyze_structural_layer(
             "STRUCT_FOREIGN_FONT_TEXT_INSERTION",
             "STRUCT_EDITOR_PLACEHOLDER_TEXT",
             "STREAM_APPENDED_CONTENT_STREAM_TEXT",
+            "STREAM_APPENDED_STREAM_TEXT_SPAN",
+            "STREAM_TEXT_INSERTION_ON_BASELINE",
+            "STRUCT_LINE_FRAGMENTATION",
+            "STRUCT_LATE_ADDITION_OBJECT_NUMBER",
             "VERIFY_TEXT_DIFF_ADDED",
         )
     )

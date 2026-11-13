@@ -4,6 +4,12 @@ An evidence-based PDF forensic analysis service with an interactive web dashboar
 
 1. **Layer 1: PDF Structural Analysis**
    - Text spans, fonts, sizes, colors, bounding boxes, and positioning.
+   - **Per-Stream Operator Mapping**: Separates and extracts text operators (`Tj`, `TJ`, `'`, `"`) per content stream, flagging exactly which strings come from appended streams (streams 2, 3, 4, 5, etc.) with coordinates.
+   - **Stream-Origin Heuristics**: Detects text from secondary streams inserted directly into a baseline of first-stream text (e.g. "document1" in stream 1 and "23." in stream 4 on the same baseline).
+   - **Line Fragmentation Detection**: Flags lines split into fragmented text runs with anomalous x-offsets, micro-gaps, or kerning differences.
+   - **Object-Number Analysis**: Discovers unreferenced orphan objects combined with higher-numbered content streams attached to pages whose base stream is lower-numbered, exposing late additions.
+   - **Producer & Metadata Verification**: Correlates `/Producer`, `/Creator`, and XMP history with content streams, elevating suspicion when known online editors (e.g., Sejda, iLovePDF) coincide with appended streams.
+   - **Compound Signal Escalation**: Mutually reinforcing signals (orphans + appended streams + text insertion) escalate verdict and confidence to `likely_edited` (0.88).
    - Opaque / white vector rectangles covering text or images (a telltale signature of online PDF editors like Sejda and SmallPDF used to redact/whiteout figures).
    - Abrupt font switches within otherwise homogeneous text blocks.
    - Text-to-text overlaps and sparse digital text overlaid on embedded bitmap images.
@@ -18,6 +24,7 @@ An evidence-based PDF forensic analysis service with an interactive web dashboar
    - **Copy-Move / Duplicate Region Detection**: Block-based feature matching across page imagery to flag candidate duplicated elements with safeguards against tables, ruling lines, and repetitive headers.
    - **Error Level Analysis (ELA)**: Re-compression discrepancy mapping as an auxiliary experimental signal.
    - **Visual Overlay & Heatmap Generation**: Highlighting suspicious regions on rendered page previews with interactive toggle between original and flagged overlay.
+   - **Revision-Aware & Stream-Origin Highlighting**: Draws bounding boxes and badges (`APPENDED STREAM TEXT`, `STREAM INSERTION`, `LINE FRAGMENTATION`, `MODIFIED TEXT`, `INSERTED TEXT`) on rendered page previews for text from appended streams, baseline insertions, and fragmented lines. Fully rewritten PDFs without accessible revision history or reference copies utilize stream-origin and fragmentation forensics.
 
 3. **Layer 3: Independent Verification**
    - **Digital Signature Cryptography**: pyHanko validation, ByteRange EOF coverage, cryptographic digest verification, and DocMDP permission checks.

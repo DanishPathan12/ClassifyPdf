@@ -668,6 +668,43 @@ def analyze_visual_layer(
                         desc = f"Inserted text: '{added_t}'" if added_t else sf.description
                         sev = "high"
                         conf = 0.98
+                    elif code == "REV_TEXT_CHANGE_DETECTED":
+                        sev = "high"
+                        conf = 0.85
+                        if ev.get("text_change_type") == "text_added":
+                            tech = "text_added"
+                            added_t = ev.get("added_text", "")
+                            desc = f"Inserted text: '{added_t}'" if added_t else sf.description
+                        else:
+                            tech = "text_modified"
+                            old_t = ev.get("old_text", "")
+                            new_t = ev.get("new_text", "")
+                            desc = f"Altered text: '{old_t}' -> '{new_t}'" if old_t and new_t else sf.description
+                    elif code == "STREAM_TEXT_INSERTION_ON_BASELINE":
+                        tech = "stream_insertion"
+                        ins_t = ev.get("inserted_text", "")
+                        s_idx = ev.get("stream_index", "")
+                        desc = f"Stream {s_idx} text inserted on baseline: '{ins_t}'" if ins_t else sf.description
+                        sev = "high"
+                        conf = 0.95
+                    elif code == "STREAM_APPENDED_STREAM_TEXT_SPAN":
+                        tech = "appended_stream_text"
+                        txt = ev.get("text", "")
+                        s_idx = ev.get("stream_index", "")
+                        desc = f"Text from appended stream {s_idx}: '{txt}'" if txt else sf.description
+                        sev = "high"
+                        conf = 0.85
+                    elif code == "STRUCT_LINE_FRAGMENTATION":
+                        tech = "line_fragmentation"
+                        frag = ev.get("fragment", "")
+                        desc = f"Line fragmentation edit: '{frag}'" if frag else sf.description
+                        sev = "medium"
+                        conf = 0.75
+                    elif code == "STRUCT_LATE_ADDITION_OBJECT_NUMBER":
+                        tech = "appended_stream_text"
+                        desc = sf.description
+                        sev = "high"
+                        conf = 0.80
                     elif code == "STRUCT_EDITOR_PLACEHOLDER_TEXT":
                         tech = "editor_placeholder"
                         pl_t = ev.get("text", "")
@@ -718,9 +755,12 @@ def analyze_visual_layer(
                         if _boxes_overlap(b_pdf, existing_r.bbox_pdf, min_overlap_ratio=0.50):
                             tech_ranks = {
                                 "text_modified": 10,
+                                "stream_insertion": 9,
                                 "text_added": 9,
+                                "appended_stream_text": 8,
                                 "editor_placeholder": 8,
                                 "foreign_font": 7,
+                                "line_fragmentation": 7,
                                 "whiteout_rect": 6,
                                 "white_text_layer": 5,
                                 "background_texture": 4,
@@ -768,9 +808,12 @@ def analyze_visual_layer(
                 # Distinct color palette per technique for crystal clarity
                 tech_colors = {
                     "text_modified": (220, 38, 38),      # Crimson Red
+                    "stream_insertion": (220, 38, 38),   # Crimson Red
                     "text_added": (234, 88, 12),         # Vivid Orange-Red
+                    "appended_stream_text": (234, 88, 12),# Vivid Orange-Red
                     "editor_placeholder": (225, 29, 72), # Deep Magenta / Rose
                     "foreign_font": (147, 51, 234),      # Purple / Violet (injected font)
+                    "line_fragmentation": (217, 119, 6), # Deep Amber
                     "whiteout_rect": (239, 68, 68),      # Bright Red
                     "white_text_layer": (185, 28, 28),   # Dark Red
                     "hidden_white_text": (168, 85, 247), # Violet
@@ -797,9 +840,12 @@ def analyze_visual_layer(
                     # 3. Clean readable badge
                     label_map = {
                         "text_modified": "MODIFIED TEXT",
+                        "stream_insertion": "STREAM INSERTION",
                         "text_added": "INSERTED TEXT",
+                        "appended_stream_text": "APPENDED STREAM TEXT",
                         "editor_placeholder": "EDITOR PLACEHOLDER",
                         "foreign_font": "INJECTED FONT",
+                        "line_fragmentation": "LINE FRAGMENTATION",
                         "whiteout_rect": "WHITEOUT RECT",
                         "white_text_layer": "WHITE TEXT MASK",
                         "hidden_white_text": "HIDDEN WHITE TEXT",

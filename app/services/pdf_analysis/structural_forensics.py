@@ -108,7 +108,7 @@ def _inspect_unreferenced_objects(pdf: pikepdf.Pdf, findings: list[ForensicFindi
     def _traverse(obj: Any) -> None:
         if isinstance(obj, pikepdf.Object):
             oid = getattr(obj, "objgen", None)
-            if oid:
+            if oid and oid != (0, 0):
                 if oid in visited_oids:
                     return
                 visited_oids.add(oid)

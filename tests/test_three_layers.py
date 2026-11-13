@@ -161,6 +161,49 @@ def test_visual_layer_renders_page_previews() -> None:
     assert preview.overlay_image_base64.startswith("data:image/png;base64,")
 
 
+def test_visual_layer_highlights_incremental_text_appended_to_existing_word() -> None:
+    """Layer 2 highlights text appended to an existing word when revision history is available."""
+    import io
+
+    from pyhanko.pdf_utils import generic
+    from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+
+    original_bytes = make_normal_pdf(text="I live pizza")
+    with fitz.open(stream=original_bytes, filetype="pdf") as original:
+        original_span = next(
+            span
+            for block in original[0].get_text("dict")["blocks"]
+            if block.get("type") == 0
+            for line in block["lines"]
+            for span in line["spans"]
+        )
+        append_x = original_span["bbox"][2]
+
+    writer = IncrementalPdfFileWriter(io.BytesIO(original_bytes))
+    appended_stream = generic.StreamObject(
+        stream_data=f"BT /F1 12 Tf {append_x:.2f} 200 Td (123) Tj ET".encode("ascii")
+    )
+    writer.add_stream_to_page(0, writer.add_object(appended_stream))
+    candidate_buffer = io.BytesIO()
+    writer.write(candidate_buffer)
+
+    loaded = load_pdf(candidate_buffer.getvalue(), filename="same_word_append.pdf")
+    structural = analyze_structural_layer(loaded)
+    revision_findings = [f for f in structural.findings if f.code == "REV_TEXT_CHANGE_DETECTED"]
+    assert len(revision_findings) >= 1
+    assert revision_findings[0].evidence["text_change_type"] == "text_added"
+    assert revision_findings[0].evidence["added_text"] == "123"
+
+    visual = analyze_visual_layer(loaded, dpi=120, structural_findings=structural.findings)
+    added_regions = [
+        region
+        for region in visual.page_previews[0].suspicious_regions
+        if region.technique == "text_added"
+    ]
+    assert len(added_regions) >= 1
+    assert "123" in added_regions[0].description
+
+
 def test_visual_layer_detects_whiteout_texture_patch() -> None:
     """Layer 2 identifies rectangular flat texture drop patches."""
     pdf_bytes = _make_pdf_with_whiteout_overlay()

@@ -16,6 +16,7 @@ from app.schemas.analysis import (
     TestCase1IncrementalResult,
 )
 from app.services.pdf_analysis.pdf_loader import LoadedPdf
+from app.services.pdf_analysis.shared_utils import compare_revisions_content, extract_pdf_layout
 
 logger = logging.getLogger("pdf_analyser.revision_forensics")
 
@@ -233,6 +234,7 @@ def analyze_revision_structure(loaded_pdf: LoadedPdf) -> RevisionForensicsResult
         text_change_found = False
         old_text_sample = ""
         new_text_sample = ""
+        revision_text_changes: list[RevisionChange] = []
         if reader is not None and total_revisions > 1:
             try:
                 sxref = reader.xrefs.get_startxref_for_revision(0)
@@ -256,6 +258,19 @@ def analyze_revision_structure(loaded_pdf: LoadedPdf) -> RevisionForensicsResult
                             text_change_found = True
                             old_text_sample = prev_text[:80]
                             new_text_sample = curr_text[:80]
+                            try:
+                                revision_text_changes = [
+                                    change
+                                    for change in compare_revisions_content(
+                                        extract_pdf_layout(slice_0),
+                                        extract_pdf_layout(pdf_bytes),
+                                    )
+                                    if change.type in ("text_added", "text_changed")
+                                    and change.location is not None
+                                    and change.location.bbox is not None
+                                ]
+                            except Exception as layout_err:
+                                logger.debug("Revision text location comparison note: %s", layout_err)
                         doc_prev.close()
                         doc_curr.close()
                     except Exception:
@@ -264,33 +279,60 @@ def analyze_revision_structure(loaded_pdf: LoadedPdf) -> RevisionForensicsResult
                 pass
 
         if text_change_found:
-            findings.append(
-                ForensicFinding(
-                    code="REV_TEXT_CHANGE_DETECTED",
-                    category="revision_change_detected",
-                    domain="revision_history",
-                    severity="high",
-                    confidence=0.85,
-                    anomaly_confidence=0.95,
-                    tampering_confidence=0.80,
-                    description=(
-                        f"Direct text modification recovered across revision 1 and revision {total_revisions}: "
-                        "historical text differed from current text."
-                    ),
-                    evidence={
-                        "revision_count": total_revisions,
-                        "old_text_sample": old_text_sample,
-                        "new_text_sample": new_text_sample,
-                    },
-                    limitations=[
-                        "Incremental document revisions can represent legitimate edits, corrections, or normal authorized version updates in standard workflow tools.",
-                    ],
-                    alternative_explanations=[
-                        "Authorized form filling or contract revision saved via standard incremental update.",
-                    ],
-                    recommended_action="Inspect differences between the historical revision and current revision to verify authorization.",
+            changes_to_report: list[RevisionChange | None] = revision_text_changes or [None]
+            for change in changes_to_report:
+                evidence: dict[str, Any] = {
+                    "revision_count": total_revisions,
+                    "old_text_sample": old_text_sample,
+                    "new_text_sample": new_text_sample,
+                }
+                if change is not None and change.location is not None:
+                    old_text = change.old_text or ""
+                    new_text = change.new_text or ""
+                    old_normalized = " ".join(old_text.split())
+                    new_normalized = " ".join(new_text.split())
+                    added_suffix = (
+                        new_normalized[len(old_normalized):].strip()
+                        if old_normalized and new_normalized.startswith(old_normalized)
+                        else ""
+                    )
+                    change_type = (
+                        "text_added"
+                        if change.type == "text_added" or added_suffix
+                        else "text_modified"
+                    )
+                    evidence.update({
+                        "page": change.page,
+                        "bbox": change.location.bbox,
+                        "text_change_type": change_type,
+                        "old_text": old_text,
+                        "new_text": new_text,
+                        "added_text": added_suffix or (new_text if change.type == "text_added" else ""),
+                    })
+
+                findings.append(
+                    ForensicFinding(
+                        code="REV_TEXT_CHANGE_DETECTED",
+                        category="revision_change_detected",
+                        domain="revision_history",
+                        severity="high",
+                        confidence=0.85,
+                        anomaly_confidence=0.95,
+                        tampering_confidence=0.80,
+                        description=(
+                            f"Direct text modification recovered across revision 1 and revision {total_revisions}: "
+                            "historical text differed from current text."
+                        ),
+                        evidence=evidence,
+                        limitations=[
+                            "Incremental document revisions can represent legitimate edits, corrections, or normal authorized version updates in standard workflow tools.",
+                        ],
+                        alternative_explanations=[
+                            "Authorized form filling or contract revision saved via standard incremental update.",
+                        ],
+                        recommended_action="Inspect differences between the historical revision and current revision to verify authorization.",
+                    )
                 )
-            )
 
         # Distinguish suspicious structural replacement from benign incremental updates
         if suspicious_structural_replacement:

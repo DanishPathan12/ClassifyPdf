@@ -29,6 +29,9 @@ STRONG_INDICATOR_CODES = frozenset({
     "REV_CRITICAL_OBJECT_REPLACED",
     "REV_TEXT_CHANGE_DETECTED",
     "STRUCT_EDITOR_PLACEHOLDER_TEXT",
+    "STREAM_TEXT_INSERTION_ON_BASELINE",
+    "META_EDITOR_PRODUCER_WITH_APPENDED_STREAM",
+    "STRUCT_LATE_ADDITION_OBJECT_NUMBER",
 })
 
 # Moderate indicators that require independent correlation
@@ -48,6 +51,8 @@ MODERATE_INDICATOR_CODES = frozenset({
     "STRUCT_FOREIGN_FONT_TEXT_INSERTION",
 
     "STREAM_APPENDED_CONTENT_STREAM_TEXT",
+    "STREAM_APPENDED_STREAM_TEXT_SPAN",
+    "STRUCT_LINE_FRAGMENTATION",
     "VISUAL_WHITEOUT_PATCH_DETECTED",
     "VISUAL_WHITE_TEXT_LAYER_OVERLAY",
     "VISUAL_DUPLICATE_REGION_CANDIDATE",
@@ -207,7 +212,55 @@ def evaluate_forensic_evidence(
             ],
         )
 
-    # Rule B: Strong internal structural / revision indicators
+    # Rule B.1: Compounding Mutually Reinforcing Structural Signals Escalation
+    # Orphans (47%) + appended text streams (60%) + text insertion indicator
+    # are independent and mutually reinforcing. Raise score when several structural signals agree.
+    orphan_signals = [f for f in all_findings if f.code in ("STREAM_UNREFERENCED_ORPHAN_OBJECTS", "STRUCT_LATE_ADDITION_OBJECT_NUMBER")]
+    appended_stream_signals = [f for f in all_findings if f.code in ("STREAM_APPENDED_CONTENT_STREAM_TEXT", "STREAM_APPENDED_STREAM_TEXT_SPAN")]
+    text_insertion_signals = [
+        f for f in all_findings
+        if f.code in (
+            "STREAM_TEXT_INSERTION_ON_BASELINE",
+            "STRUCT_LINE_FRAGMENTATION",
+            "STRUCT_FOREIGN_FONT_TEXT_INSERTION",
+            "STRUCT_EDITOR_PLACEHOLDER_TEXT",
+            "STRUCT_WHITEOUT_RECTANGLE_OVERLAY",
+            "STRUCT_WHITE_TEXT_LAYER_OVERLAY",
+            "META_EDITOR_PRODUCER_WITH_APPENDED_STREAM",
+        )
+    ]
+    editor_producer_signals = [f for f in all_findings if f.code == "META_EDITOR_PRODUCER_WITH_APPENDED_STREAM"]
+
+    if (orphan_signals and appended_stream_signals and text_insertion_signals) or (editor_producer_signals and (appended_stream_signals or orphan_signals)):
+        conf = 0.88
+        summary = (
+            "Credible forensic evidence indicates subsequent modification: "
+            "mutually reinforcing independent structural signals agree — unreferenced orphan objects, "
+            "appended secondary content streams, and localized text insertion corroborate document manipulation."
+        )
+        return DecisionOutcome(
+            verdict=ForensicVerdict.LIKELY_EDITED.value,
+            edit_detected=True,
+            confidence=conf,
+            summary=summary,
+            analysis_status="completed",
+            checks=checks,
+            limitations=limitations,
+            all_findings=all_findings,
+            assessment_status="suspicious_indicators_detected",
+            score_explanation=(
+                f"Score {conf}: Independent mutually reinforcing structural signals "
+                "(orphan objects + appended text content streams + text insertion indicator) "
+                "concur, compounding confidence above isolated baseline thresholds."
+            ),
+            recommended_next_steps=[
+                "Inspect the visual overlay highlights showing exact strings emitted from appended streams.",
+                "Verify whether the inserted baseline text alters contract values, names, or dates.",
+                "Request a certified original copy directly from the issuing authority.",
+            ],
+        )
+
+    # Rule B.2: Strong internal structural / revision indicators
     if strong_findings:
         top_strong = strong_findings[0]
         conf = min(0.95, 0.85 + (0.05 if len(domains_with_evidence) > 1 else 0.0) + (0.05 if len(strong_findings) > 1 else 0.0))
@@ -226,7 +279,7 @@ def evaluate_forensic_evidence(
             checks=checks,
             limitations=limitations,
             all_findings=all_findings,
-            assessment_status="confirmed_integrity_failure",
+            assessment_status="confirmed_integrity_failure" if top_strong.code in ("REV_CRITICAL_OBJECT_REPLACED", "REV_TEXT_CHANGE_DETECTED") else "suspicious_indicators_detected",
             score_explanation=f"Score {conf}: Strong verifiable finding ({top_strong.code}) establishes that document integrity was breached.",
             recommended_next_steps=[
                 "Inspect differences between the historical revision and current revision to verify authorization.",
