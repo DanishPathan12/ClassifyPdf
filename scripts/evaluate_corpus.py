@@ -245,6 +245,30 @@ def build_evaluation_corpus() -> list[LabeledTestCase]:
             generator=make_resaved_pdf_with_overlap,
         ),
     ]
+    # Optional real-world fixtures are included when supplied locally. They are
+    # intentionally discovered rather than embedded or synthesized so reported
+    # metrics reflect the files actually evaluated.
+    real_world = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "real_world"
+    optional_files = [
+        ("REAL_SAMPLE5", "sample5.pdf", "legitimate_filler", "real_world_download", False,
+         "User-supplied repeated Lorem ipsum filler; expected legitimate template content."),
+        ("REAL_TEST1", "test__1_.pdf", "legitimate_download", "real_world_download", False,
+         "User-supplied untouched Adobe Reader test download; multiple streams/orphans are not sufficient."),
+        ("REAL_TEST1_EDITED", "test__1__edited.pdf", "real_world_edit", "full_rewrite_edit", True,
+         "Optional user-supplied full rewrite with inserted text; no revision chain is assumed."),
+    ]
+    for case_id, filename, category, workflow, edited, rationale in optional_files:
+        path = real_world / filename
+        if path.is_file():
+            corpus.append(LabeledTestCase(
+                id=case_id,
+                name=filename,
+                category=category,
+                workflow=workflow,
+                ground_truth_edited=edited,
+                rationale=rationale,
+                generator=lambda path=path: path.read_bytes(),
+            ))
     return corpus
 
 

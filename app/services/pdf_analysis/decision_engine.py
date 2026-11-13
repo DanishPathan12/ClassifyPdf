@@ -28,7 +28,6 @@ CONFIRMED_EVIDENCE_CODES = frozenset({
 STRONG_INDICATOR_CODES = frozenset({
     "REV_CRITICAL_OBJECT_REPLACED",
     "REV_TEXT_CHANGE_DETECTED",
-    "STRUCT_EDITOR_PLACEHOLDER_TEXT",
     "STREAM_TEXT_INSERTION_ON_BASELINE",
     "META_EDITOR_PRODUCER_WITH_APPENDED_STREAM",
     "STRUCT_LATE_ADDITION_OBJECT_NUMBER",
@@ -38,7 +37,8 @@ STRONG_INDICATOR_CODES = frozenset({
 MODERATE_INDICATOR_CODES = frozenset({
     "META_MODDATE_BEFORE_CREATION",
     "META_MODDATE_DIFFERS_CREATION",
-    "STREAM_UNREFERENCED_ORPHAN_OBJECTS",
+    # Orphans and appended streams are deliberately handled as weak structural
+    # observations below; either can be produced by a legitimate re-save.
     "STREAM_DANGLING_FONT_REFERENCE",
     "REV_XREF_OFFSET_OUT_OF_BOUNDS",
     "STRUCT_WHITEOUT_RECTANGLE_OVERLAY",
@@ -50,8 +50,7 @@ MODERATE_INDICATOR_CODES = frozenset({
 
     "STRUCT_FOREIGN_FONT_TEXT_INSERTION",
 
-    "STREAM_APPENDED_CONTENT_STREAM_TEXT",
-    "STREAM_APPENDED_STREAM_TEXT_SPAN",
+    # Appended-stream codes are not moderate evidence on their own.
     "STRUCT_LINE_FRAGMENTATION",
     "VISUAL_WHITEOUT_PATCH_DETECTED",
     "VISUAL_WHITE_TEXT_LAYER_OVERLAY",
@@ -167,15 +166,28 @@ def evaluate_forensic_evidence(
     # 2. Filter findings into strength tiers and categorize by domain
     confirmed_findings = [f for f in all_findings if f.code in CONFIRMED_EVIDENCE_CODES]
     strong_findings = [f for f in all_findings if f.code in STRONG_INDICATOR_CODES]
+    # An isolated editor phrase can remain strong; a downgraded filler/template
+    # placeholder (severity=info) must not drive the verdict.
+    strong_findings.extend(
+        f for f in all_findings
+        if f.code == "STRUCT_EDITOR_PLACEHOLDER_TEXT" and f.severity == "high"
+    )
     moderate_findings = [f for f in all_findings if f.code in MODERATE_INDICATOR_CODES]
     weak_findings = [
         f for f in all_findings
-        if f.code in WEAK_INDICATOR_CODES or (
+        if f.code not in {
+            # Common re-save/export artifacts. These remain visible in the
+            # response but do not create a suspicious verdict by themselves.
+            "STREAM_UNREFERENCED_ORPHAN_OBJECTS",
+            "STREAM_APPENDED_CONTENT_STREAM_TEXT",
+            "STREAM_APPENDED_STREAM_TEXT_SPAN",
+            "STRUCT_EDITOR_PLACEHOLDER_TEXT",
+        } and (f.code in WEAK_INDICATOR_CODES or (
             f.code not in CONFIRMED_EVIDENCE_CODES
             and f.code not in STRONG_INDICATOR_CODES
             and f.code not in MODERATE_INDICATOR_CODES
             and f.severity in ("low", "medium")
-        )
+        ))
     ]
 
     # Group domains that produced non-info findings
@@ -231,7 +243,22 @@ def evaluate_forensic_evidence(
     ]
     editor_producer_signals = [f for f in all_findings if f.code == "META_EDITOR_PRODUCER_WITH_APPENDED_STREAM"]
 
-    if (orphan_signals and appended_stream_signals and text_insertion_signals) or (editor_producer_signals and (appended_stream_signals or orphan_signals)):
+    # An appended stream plus orphan objects is still weak.  Escalate only when
+    # there is an independent insertion/layout clue on the same page, or when
+    # an editor producer corroborates the appended stream.  This prevents common
+    # multi-stream re-saves from becoming a tampering verdict.
+    correlated_pages = {
+        f.evidence.get("page") for f in text_insertion_signals
+        if isinstance(f.evidence, dict) and f.evidence.get("page") is not None
+    }
+    appended_pages = {
+        f.evidence.get("page") for f in appended_stream_signals
+        if isinstance(f.evidence, dict) and f.evidence.get("page") is not None
+    }
+    same_page_correlation = bool(correlated_pages & appended_pages)
+    if (orphan_signals and appended_stream_signals and same_page_correlation) or (
+        editor_producer_signals and appended_stream_signals
+    ):
         conf = 0.88
         summary = (
             "Credible forensic evidence indicates subsequent modification: "

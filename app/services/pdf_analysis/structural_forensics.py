@@ -150,6 +150,8 @@ def _inspect_unreferenced_objects(pdf: pikepdf.Pdf, findings: list[ForensicFindi
                     code="STREAM_UNREFERENCED_ORPHAN_OBJECTS",
                     category="suspicious",
                     domain="content_stream",
+                    # Preserve the legacy finding label for API compatibility;
+                    # the decision engine treats this as weak unless correlated.
                     severity="medium",
                     confidence=0.55,
                     description=(

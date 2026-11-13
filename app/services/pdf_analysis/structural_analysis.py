@@ -906,6 +906,9 @@ def analyze_structural_layer(
                                     code="STREAM_APPENDED_CONTENT_STREAM_TEXT",
                                     category="possible_text_insertion",
                                     domain="content_stream",
+                                    # A later stream is not, by itself, evidence
+                                    # of editing; the decision engine only
+                                    # escalates it when independent evidence agrees.
                                     severity="medium",
                                     confidence=0.70,
                                     anomaly_confidence=0.85,
@@ -1507,9 +1510,15 @@ def analyze_structural_layer(
                 prod_s = str(info_d.get("/Producer", "")) if info_d else ""
                 creat_s = str(info_d.get("/Creator", "")) if info_d else ""
                 combined_meta = (prod_s + " " + creat_s).lower()
-                editor_tools = ("sejda", "ilovepdf", "smallpdf", "pdfescape", "foxit", "nitro", "canva", "pdffiller", "pdf24", "pdfcreator", "preview")
+                editor_tools = ("sejda", "ilovepdf", "smallpdf", "pdfescape", "foxit", "nitro", "canva", "pdffiller")
+                known_multi_stream_generators = (
+                    "acrobat distiller", "distiller", "microsoft", "word", "print driver",
+                    "cups", "ghostscript", "reportlab", "libreoffice", "preview",
+                    "pdf24", "pdfcreator",
+                )
                 matched_ed = next((t for t in editor_tools if t in combined_meta), None)
-                if matched_ed:
+                is_known_generator = any(t in combined_meta for t in known_multi_stream_generators)
+                if matched_ed and not is_known_generator:
                     app_pages = [
                         f.evidence.get("page")
                         for f in findings
@@ -1561,6 +1570,80 @@ def analyze_structural_layer(
                 pikepdf_doc.close()
             except Exception:
                 pass
+
+    # Placeholder residue is document-level evidence, not a per-span event.
+    # Repeated lorem ipsum is normally the actual content of a template or
+    # sample document, so it must not be treated like an isolated editor box.
+    placeholder_findings = [
+        f for f in findings if f.code == "STRUCT_EDITOR_PLACEHOLDER_TEXT"
+    ]
+    if placeholder_findings:
+        placeholder_spans = [
+            sp for sp in all_spans if EDITOR_PLACEHOLDER_REGEX.match(sp.text)
+        ]
+        total_chars = sum(len(sp.text.strip()) for sp in all_spans)
+        placeholder_chars = sum(len(sp.text.strip()) for sp in placeholder_spans)
+        placeholder_fraction = placeholder_chars / max(1, total_chars)
+        pages = sorted({sp.page for sp in placeholder_spans})
+        is_lorem = any("lorem ipsum" in sp.text.lower() for sp in placeholder_spans)
+
+        # Only a small, isolated residue can be escalated, and only when a
+        # second structural/metadata clue corroborates it.  The historical
+        # editor phrases ("Type your text", etc.) remain strong enough to
+        # preserve backwards compatibility; lorem ipsum follows the stricter
+        # corroboration rule because it is common legitimate document text.
+        corroborated = any(
+            f.code in {
+                "STREAM_APPENDED_STREAM_TEXT_SPAN",
+                "STREAM_TEXT_INSERTION_ON_BASELINE",
+                "STRUCT_LINE_FRAGMENTATION",
+                "META_EDITOR_PRODUCER_WITH_APPENDED_STREAM",
+            }
+            for f in findings
+            if f.code != "STRUCT_EDITOR_PLACEHOLDER_TEXT"
+        )
+        filler_document = (
+            is_lorem and (placeholder_fraction > 0.20 or len(placeholder_spans) > 3)
+        )
+        keep_high = (
+            not is_lorem and len(placeholder_spans) <= 2
+        ) or (
+            is_lorem and len(placeholder_spans) <= 2 and corroborated
+        )
+        representative = placeholder_findings[0]
+        if filler_document or not keep_high:
+            representative.severity = "info"
+            representative.confidence = min(representative.confidence, 0.25)
+            representative.anomaly_confidence = min(representative.anomaly_confidence, 0.40)
+            representative.tampering_confidence = min(representative.tampering_confidence, 0.10)
+            representative.category = "informational"
+            representative.description = (
+                "Repeated placeholder-like text is consistent with legitimate filler/template content; "
+                "it is not treated as an editing indicator without corroborating evidence."
+            )
+            representative.evidence = {
+                "text": " ".join(sorted({sp.text for sp in placeholder_spans}))[:500],
+                "occurrence_count": len(placeholder_spans),
+                "pages": pages,
+                "placeholder_text_fraction": round(placeholder_fraction, 4),
+                "classified_as_filler_or_template": filler_document,
+                "corroborated": corroborated,
+            }
+            representative.limitations = [
+                "Without a trusted original, common filler text cannot establish who created or edited the PDF.",
+            ]
+        else:
+            representative.evidence = {
+                "text": representative.evidence.get("text", ""),
+                "occurrence_count": len(placeholder_spans),
+                "pages": pages,
+                "placeholder_text_fraction": round(placeholder_fraction, 4),
+                "corroborated": corroborated,
+                "bbox": representative.evidence.get("bbox"),
+                "font": representative.evidence.get("font"),
+            }
+        findings = [f for f in findings if f.code != "STRUCT_EDITOR_PLACEHOLDER_TEXT"]
+        findings.append(representative)
 
     # Calculate granular counts for enhanced text tampering audit
     formatting_count = sum(1 for f in findings if f.category == "formatting_anomaly")
